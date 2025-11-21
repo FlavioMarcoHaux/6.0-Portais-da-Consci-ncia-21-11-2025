@@ -1,0 +1,21 @@
+{
+  "short_name": "Portais",
+  "name": "Portais da Consciência",
+  "icons": [
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0D1117",
+  "background_color": "#0D1117",
+  "description": "Uma aplicação para explorar a consciência, alcançar harmonia interior e otimizar a vida através de mentores de IA e ferramentas de coerência."
+}

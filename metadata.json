@@ -1,0 +1,8 @@
+{
+  "name": "6.0 Portais da Consciência 21-11-2025",
+  "description": "Tudo pronto",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
