@@ -1,3 +1,4 @@
+
 import { AudioScriptBlock } from '../types.ts';
 import { generateSpeech, TtsVoice } from './geminiTtsService.ts';
 import { decode, decodeAudioData, encodeWAV } from '../utils/audioUtils.ts';
@@ -65,7 +66,8 @@ export const renderAudioSession = async (
     voice: TtsVoice,
     onProgress: (progress: number) => void
 ): Promise<string> => {
-    const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const sampleRate = 24000; // Optimized for Voice/Web Audio stability (Reduced from 44100)
+    const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
     const audioBuffers: AudioBuffer[] = [];
     
     // 1. Generate TTS Audio for all blocks (Sequential to avoid rate limits)
@@ -76,21 +78,20 @@ export const renderAudioSession = async (
             const speech = await generateSpeech(block.text, voice);
             if (speech?.data) {
                 const audioData = decode(speech.data);
-                const buffer = await decodeAudioData(audioData, tempCtx, 24000, 1);
+                const buffer = await decodeAudioData(audioData, tempCtx, sampleRate, 1);
                 audioBuffers.push(buffer);
             } else {
                 // Create silent buffer if TTS fails to avoid breaking timeline
-                audioBuffers.push(tempCtx.createBuffer(1, 24000, 24000)); 
+                audioBuffers.push(tempCtx.createBuffer(1, sampleRate, sampleRate)); 
             }
         } catch (e) {
             console.error("TTS Generation failed for block", i, e);
-            audioBuffers.push(tempCtx.createBuffer(1, 24000, 24000));
+            audioBuffers.push(tempCtx.createBuffer(1, sampleRate, sampleRate));
         }
     }
     
     // 2. Calculate Total Duration and Timeline with Time-Boxing
     let totalSamples = 0;
-    const sampleRate = 44100; // Standard for output
     const timeline: { start: number; buffer: AudioBuffer; block: AudioScriptBlock; pauseDuration: number }[] = [];
     
     let currentTime = 0;

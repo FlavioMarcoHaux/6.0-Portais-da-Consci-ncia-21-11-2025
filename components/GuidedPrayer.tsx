@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../store.ts';
 import { CoherenceVector, AgentId, Session } from '../types.ts';
@@ -49,11 +50,18 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
     
     const audioRef = useRef<HTMLAudioElement>(null);
     const wasAutoStarted = useRef(false);
+    const hasConsumedInitialTheme = useRef(false);
 
     const suggestions = useMemo(() => getPrayerSuggestions(coherenceVector), [coherenceVector]);
 
     const handleGenerate = useCallback(async (inputTheme: string) => {
-        updateState({ state: 'generating', error: null, blocks: [] });
+        // Explicitly clear audioDataUrl before updating state to ensure browser releases memory
+        if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(audioDataUrl);
+        }
+        
+        updateState({ state: 'generating', error: null, blocks: [], audioDataUrl: null, progress: 0 });
+        
         try {
             const generatedBlocks = await generateGuidedPrayer(inputTheme, duration, prayerType, chatHistory);
             updateState({ blocks: generatedBlocks, state: 'display' });
@@ -61,12 +69,17 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
             const friendlyError = getFriendlyErrorMessage(err, "Falha ao gerar a oração.");
             updateState({ error: friendlyError, state: 'error' });
         }
-    }, [chatHistory, updateState, duration, prayerType]);
+    }, [chatHistory, updateState, duration, prayerType, audioDataUrl]);
 
     const handleGenerateAudio = useCallback(async () => {
         if (!blocks || blocks.length === 0) return;
         setIsGeneratingAudio(true);
+        
+        if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(audioDataUrl);
+        }
         updateState({ audioDataUrl: null, error: null, progress: 0 });
+        
         try {
             const voiceName = prayerType === 'diurna' ? 'Kore' : (prayerType === 'noturna' ? 'Fenrir' : 'Zephyr');
             
@@ -81,7 +94,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         } finally {
             setIsGeneratingAudio(false);
         }
-    }, [blocks, updateState, prayerType]);
+    }, [blocks, updateState, prayerType, audioDataUrl]);
 
     useEffect(() => {
         const session = currentSession as Extract<Session, { type: 'guided_prayer' }>;
@@ -91,20 +104,24 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
             updateState({ state: 'display', theme, blocks, audioDataUrl, error: null });
             wasAutoStarted.current = true;
             setIsAutoSuggesting(false);
+            hasConsumedInitialTheme.current = true;
             return;
         }
 
         if (state !== 'config') return;
+        if (hasConsumedInitialTheme.current) return; // Don't re-apply theme if we manually reset
 
         const recommendAndFetch = async () => {
             if (session?.autoStart && session.initialTheme) {
                 wasAutoStarted.current = true;
+                hasConsumedInitialTheme.current = true;
                 updateState({ theme: session.initialTheme });
                 handleGenerate(session.initialTheme);
                 return;
             }
 
             if (session?.initialTheme) {
+                hasConsumedInitialTheme.current = true;
                 updateState({ theme: session.initialTheme });
                 setIsAutoSuggesting(false);
                 return;
@@ -152,6 +169,11 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
     }, [audioDataUrl]);
 
     const handleReset = () => {
+        if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(audioDataUrl);
+        }
+        hasConsumedInitialTheme.current = true;
+        // Ensure theme is cleared to prevent pre-filling
         updateState({ state: 'config', theme: '', blocks: [], audioDataUrl: null, error: null, progress: 0 });
         wasAutoStarted.current = false;
         setIsPlaying(false);
@@ -266,7 +288,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                 );
             case 'display':
                 return (
-                    <div className="animate-fade-in w-full max-w-3xl mx-auto text-center flex flex-col h-full">
+                    <div className="animate-fade-in w-full max-w-3xl mx-auto text-center flex flex-col h-full" key={audioDataUrl || 'no-audio'}>
                         <h2 className="text-2xl font-bold text-center mb-4 text-yellow-300 flex-shrink-0">Intenção: "{theme}"</h2>
 
                         {!audioDataUrl && !isGeneratingAudio && blocks.length > 0 && (

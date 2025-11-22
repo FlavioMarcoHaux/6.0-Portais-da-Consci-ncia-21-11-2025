@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { Message, CoherenceVector, AudioScriptBlock } from '../types.ts';
 
@@ -69,8 +70,9 @@ const generateLongPrayer = async (
     // 32 blocos x ~850 tokens/bloco = ~27.200 tokens.
     
     let numBlocks = 8; // Base para curtas
-    // Cálculo de palavras inflacionado para garantir densidade (350 palavras/min na escrita gera sobra para leitura lenta)
-    let wordsPerMinuteBase = 350; 
+    // Cálculo de palavras calibrado para ritmo de oração (fala lenta/pausada/solene)
+    // 70 palavras/min garante um ritmo contemplativo real e evita estouro de tempo.
+    let wordsPerMinuteBase = 70; 
 
     if (duration === 15) { numBlocks = 10; }
     else if (duration === 20) { numBlocks = 14; }
@@ -126,7 +128,7 @@ const generateLongPrayer = async (
 
             // Instrução de "Magia Implícita" e Alta Densidade
             const densityInstruction = block.density === 'high' 
-                ? `**MODO MAGIA IMPLÍCITA (ALTA DENSIDADE):** Escreva um texto longo e rico (aprox. **${targetWordCount} palavras**).
+                ? `**MODO MAGIA IMPLÍCITA (ALTA DENSIDADE):** Escreva um texto rico e profundo (aprox. **${targetWordCount} palavras**).
                    - Use **Comandos Embutidos** (Embedded Commands) disfarçados na narrativa.
                    - Use **Pressuposições** de que a mudança já está ocorrendo.
                    - Use **Descrição Sensorial Vívida** (V/A/C) para criar realidade.
