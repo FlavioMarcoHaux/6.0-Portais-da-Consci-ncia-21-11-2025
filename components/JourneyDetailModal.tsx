@@ -60,6 +60,14 @@ const RenderContent: React.FC<{ entry: ActivityLogEntry, closeModal: () => void 
         );
     }
 
+    if (entry.type !== 'tool_usage') {
+        return (
+            <div className="p-4 text-center">
+                <p className="text-gray-400">Detalhes não disponíveis para este tipo de atividade.</p>
+            </div>
+        );
+    }
+
     // Handle tool usage
     const { toolId, result } = entry.data;
 
@@ -258,15 +266,19 @@ const JourneyDetailModal: React.FC<JourneyDetailModalProps> = ({ entry, onClose 
     let title: string;
     if (entry.type === 'chat_session') {
         title = `Conversa com ${agent.name}`;
-    } else if (entry.data.toolId === 'archetype_journey' && entry.data.result?.result?.lente?.title) {
-        title = `Jornada: ${entry.data.result.result.lente.title}`;
+    } else if (entry.type === 'tool_usage') {
+        if (entry.data.toolId === 'archetype_journey' && entry.data.result?.result?.lente?.title) {
+            title = `Jornada: ${entry.data.result.result.lente.title}`;
+        } else {
+            title = `Ferramenta: ${toolMetadata[entry.data.toolId]?.title || 'Desconhecida'}`;
+        }
     } else {
-        title = `Ferramenta: ${toolMetadata[entry.data.toolId]?.title || 'Desconhecida'}`;
+        title = "Detalhes da Atividade";
     }
 
-    const Icon = entry.type === 'chat_session' 
-        ? agent.icon 
-        : toolMetadata[entry.data.toolId]?.icon || agent.icon;
+    const Icon = (entry.type === 'tool_usage') 
+        ? (toolMetadata[entry.data.toolId]?.icon || agent.icon)
+        : agent.icon;
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose}>

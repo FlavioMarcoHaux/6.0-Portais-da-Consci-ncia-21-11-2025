@@ -159,16 +159,19 @@ const MeditationGuideChat: React.FC<MeditationGuideChatProps> = ({ onCreate, onE
                                 Meditações Recentes
                              </h3>
                             <div className="space-y-2">
-                                {recentMeditations.map(entry => (
-                                    <button
-                                        key={entry.id}
-                                        onClick={() => onReplay(entry.data.result)}
-                                        className="w-full text-left p-3 bg-gray-800/70 rounded-lg flex items-center justify-between gap-3 cursor-pointer hover:bg-gray-700/90 transition-colors group"
-                                    >
-                                        <p className="font-semibold text-sm text-gray-200 truncate">{entry.data.result.script.title}</p>
-                                        <Play size={18} className="text-indigo-400 flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity" />
-                                    </button>
-                                ))}
+                                {recentMeditations.map(entry => {
+                                    if (entry.type !== 'tool_usage') return null;
+                                    return (
+                                        <button
+                                            key={entry.id}
+                                            onClick={() => onReplay(entry.data.result)}
+                                            className="w-full text-left p-3 bg-gray-800/70 rounded-lg flex items-center justify-between gap-3 cursor-pointer hover:bg-gray-700/90 transition-colors group"
+                                        >
+                                            <p className="font-semibold text-sm text-gray-200 truncate">{entry.data.result.script.title}</p>
+                                            <Play size={18} className="text-indigo-400 flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity" />
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
                     )}

@@ -14,7 +14,7 @@ const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string):
 
     // Fundamental frequencies based on mood
     let frequencies = [146.83, 185.00, 220.00]; // D Minor (Deep/Sad/Ethereal default)
-    if (mood === 'warm' || mood === 'nature') frequencies = [146.83, 185.00, 220.00, 293.66]; // D Major ish (add F# if needed, keeping simple)
+    if (mood === 'warm' || mood === 'nature') frequencies = [146.83, 185.00, 220.00, 293.66]; // D Major ish
     if (mood === 'epic') frequencies = [98.00, 146.83, 196.00]; // G power chord low
     
     // Generate simple additive synthesis
@@ -36,7 +36,7 @@ const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string):
         if (t > duration - 2) envelope = (duration - t) / 2;
         
         L[i] = sample * envelope * 0.5;
-        R[i] = sample * envelope * 0.5; // Mono to stereo simple copy (could phase shift for width)
+        R[i] = sample * envelope * 0.5; 
     }
     
     return buffer;
@@ -66,11 +66,11 @@ export const renderAudioSession = async (
     voice: TtsVoice,
     onProgress: (progress: number) => void
 ): Promise<string> => {
-    const sampleRate = 24000; // Optimized for Voice/Web Audio stability (Reduced from 44100)
+    const sampleRate = 24000; // Optimized for Voice/Web Audio stability
     const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
     const audioBuffers: AudioBuffer[] = [];
     
-    // 1. Generate TTS Audio for all blocks (Sequential to avoid rate limits)
+    // 1. Generate TTS Audio for all blocks
     for (let i = 0; i < blocks.length; i++) {
         onProgress((i / blocks.length) * 50); // First 50% is TTS generation
         const block = blocks[i];
@@ -81,7 +81,6 @@ export const renderAudioSession = async (
                 const buffer = await decodeAudioData(audioData, tempCtx, sampleRate, 1);
                 audioBuffers.push(buffer);
             } else {
-                // Create silent buffer if TTS fails to avoid breaking timeline
                 audioBuffers.push(tempCtx.createBuffer(1, sampleRate, sampleRate)); 
             }
         } catch (e) {
@@ -90,7 +89,7 @@ export const renderAudioSession = async (
         }
     }
     
-    // 2. Calculate Total Duration and Timeline with Time-Boxing
+    // 2. Calculate Total Duration and Timeline with INTELLIGENT Time-Boxing
     let totalSamples = 0;
     const timeline: { start: number; buffer: AudioBuffer; block: AudioScriptBlock; pauseDuration: number }[] = [];
     
@@ -101,15 +100,22 @@ export const renderAudioSession = async (
         
         const ttsDuration = buffer.duration;
         
-        // --- TIME-BOXING LOGIC ---
-        // Calculate required pause to hit the target duration for this block.
-        // If targetDuration exists, we use it. Otherwise, fallback to the AI's suggestion.
-        let pauseDuration = block.instructions.pauseAfter;
+        // --- INTELLIGENT TIME-BOXING LOGIC ---
+        // Se o texto gerado for muito curto, NÃO force um silêncio gigante para preencher o tempo.
+        // Isso evita a sensação de "TDAH" ou desconexão.
+        // Aceitamos que a oração fique um pouco mais curta que o alvo se o conteúdo acabou,
+        // mas mantemos um fluxo musical agradável.
+        
+        let pauseDuration = block.instructions.pauseAfter || 5; // Default natural pause
         
         if (block.targetDuration) {
             const remainingTime = block.targetDuration - ttsDuration;
-            // Ensure a minimum breath of 5 seconds even if TTS ran over
-            pauseDuration = Math.max(5, remainingTime);
+            // Se sobrar tempo, adicione pausa, MAS com um teto máximo de 20s.
+            // Se o texto foi curto demais, o usuário ouvirá 20s de música e passará para o próximo bloco,
+            // mantendo o fluxo, em vez de esperar 2 minutos no silêncio.
+            if (remainingTime > 0) {
+                pauseDuration = Math.min(remainingTime, 20); 
+            }
         }
         // -------------------------
         
@@ -132,8 +138,7 @@ export const renderAudioSession = async (
         source.start(item.start);
     });
     
-    // B. Render Music/Atmosphere Layer (Dynamic Generation)
-    // We generate simple procedural tracks that span the full duration
+    // B. Render Music/Atmosphere Layer
     const musicBuffer = createPadBuffer(offlineCtx, currentTime + 5, blocks[0].instructions.mood);
     const musicSource = offlineCtx.createBufferSource();
     musicSource.buffer = musicBuffer;
@@ -142,17 +147,17 @@ export const renderAudioSession = async (
     musicGain.connect(offlineCtx.destination);
     
     // C. Render Binaural Layer
-    const avgFreq = blocks[0].instructions.binauralFreq || 4; // Default Theta
+    const avgFreq = blocks[0].instructions.binauralFreq || 4;
     const binauralBuffer = createBinauralBuffer(offlineCtx, currentTime + 5, avgFreq);
     const binauralSource = offlineCtx.createBufferSource();
     binauralSource.buffer = binauralBuffer;
     const binauralGain = offlineCtx.createGain();
-    binauralGain.gain.value = 0.05; // Very subtle
+    binauralGain.gain.value = 0.05; 
     binauralSource.connect(binauralGain);
     binauralGain.connect(offlineCtx.destination);
     
-    // D. Automation (Ducking/Swell)
-    musicGain.gain.setValueAtTime(0.3, 0); // Start volume
+    // D. Automation
+    musicGain.gain.setValueAtTime(0.3, 0);
     
     timeline.forEach(item => {
         const speechStart = item.start;
@@ -166,22 +171,22 @@ export const renderAudioSession = async (
         
         // Swell during pause
         if (item.pauseDuration > 2) {
-             musicGain.gain.linearRampToValueAtTime(0.5 * intensity, speechEnd + 1); // Swell up
-             musicGain.gain.linearRampToValueAtTime(0.5 * intensity, pauseEnd - 1);   // Hold
+             musicGain.gain.linearRampToValueAtTime(0.5 * intensity, speechEnd + 1);
+             musicGain.gain.linearRampToValueAtTime(0.5 * intensity, pauseEnd - 1);
         }
     });
     
     musicSource.start(0);
     binauralSource.start(0);
 
-    onProgress(75); // Rendering starts
+    onProgress(75);
 
     // 4. Final Render
     const renderedBuffer = await offlineCtx.startRendering();
     
-    onProgress(90); // Encoding
+    onProgress(90);
 
-    // 5. Convert to WAV Blob
+    // 5. Convert to WAV
     const L = renderedBuffer.getChannelData(0);
     const R = renderedBuffer.getChannelData(1);
     const interleaved = new Float32Array(L.length + R.length);
