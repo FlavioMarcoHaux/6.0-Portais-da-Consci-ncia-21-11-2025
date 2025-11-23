@@ -5,7 +5,7 @@ import { Message, CoherenceVector, AudioScriptBlock } from '../types.ts';
 // O Arquiteto (Inteligência Pura) usa o modelo Pro
 const ARCHITECT_MODEL = 'gemini-3-pro-preview';
 
-// O Escritor (Volume e Velocidade) usa o modelo Flash para economizar cota e tempo
+// O Escritor (Volume e Velocidade) usa o modelo Flash
 const WRITER_MODEL = 'gemini-2.5-flash'; 
 
 const formatChatHistoryForPrompt = (chatHistory: Message[]): string => {
@@ -15,20 +15,20 @@ const formatChatHistoryForPrompt = (chatHistory: Message[]): string => {
     return `\n\n--- Histórico da Conversa Recente para Contexto ---\n${formatted}\n--- Fim do Histórico ---`;
 }
 
-// Schema for the "Architect" step of the prayer cascade
+// Schema for the "Architect" step
 const prayerOutlineSchema = {
     type: Type.OBJECT,
     properties: {
-        title: { type: Type.STRING, description: "Título poderoso da oração (Otimizado para SEO)." },
+        title: { type: Type.STRING, description: "Título poderoso da oração (Otimizado para SEO/Clickbait Espiritual)." },
         blocks: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
                 properties: {
-                    blockTheme: { type: Type.STRING, description: "Tema deste bloco (ex: Salmo 91, Quebra de Maldição, Ancoragem de Milagre)." },
-                    guidance: { type: Type.STRING, description: "Instrução de PNL/Hipnose e Referência Bíblica para este bloco." },
-                    density: { type: Type.STRING, enum: ['high'], description: "Sempre High para fluxo contínuo." },
-                    suggestedMood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'], description: "Atmosfera sonora." },
+                    blockTheme: { type: Type.STRING, description: "Tema deste bloco (ex: Salmo 91, Quebra de Maldição)." },
+                    guidance: { type: Type.STRING, description: "Instrução de PNL/Hipnose e Referência Bíblica." },
+                    density: { type: Type.STRING, enum: ['high'], description: "Sempre High." },
+                    suggestedMood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 },
                 required: ['blockTheme', 'guidance', 'density', 'suggestedMood']
             }
@@ -37,18 +37,18 @@ const prayerOutlineSchema = {
     required: ['title', 'blocks']
 };
 
-// Schema for the final block output (Writer phase)
+// Schema for the final block output
 const blockOutputSchema = {
     type: Type.OBJECT,
     properties: {
-        text: { type: Type.STRING, description: "O texto exato a ser falado. Deve ser LONGO, DENSO e FLUÍDO." },
+        text: { type: Type.STRING, description: "O texto exato a ser falado. Linguagem simples, profunda e conectada." },
         instructions: {
             type: Type.OBJECT,
             properties: {
                 mood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 intensity: { type: Type.NUMBER, description: "0.0 a 1.0" },
-                binauralFreq: { type: Type.NUMBER, description: "Frequência em Hz (ex: 4 para Theta)" },
-                pauseAfter: { type: Type.INTEGER, description: "Segundos de pausa após a fala (Max 30s)." }
+                binauralFreq: { type: Type.NUMBER, description: "Frequência em Hz (ex: 4)" },
+                pauseAfter: { type: Type.INTEGER, description: "Segundos de pausa após a fala (Max 20s)." }
             },
             required: ['mood', 'intensity', 'pauseAfter']
         }
@@ -65,42 +65,39 @@ const generateLongPrayer = async (
     historyContext: string
 ): Promise<AudioScriptBlock[]> => {
     
-    // ESTRATÉGIA DE FLUXO DE MESTRE (HIPNOTERAPIA & ESPIRITUALIDADE)
-    // Para evitar "TDAH" e quebras, usamos blocos extremamente densos.
-    // Cada bloco funciona como um "Ato" completo de uma sessão de hipnose profunda.
-    
-    let numBlocks = 3; 
-    let wordsPerMinuteBase = 130; // Aumentado para garantir densidade verbal alta.
+    // ESTRATÉGIA DE FLUXO DE MESTRE (ATOS PROFUNDOS)
+    // Aumentar densidade para 120ppm para garantir que a IA fale bastante e preencha o tempo
+    let wordsPerMinuteBase = 120; 
+    let numBlocks = 3;
 
-    // Cálculo de Atos para Jornada do Herói Espiritual
+    // Blocos longos (5-10 min cada) para evitar "TDAH" e permitir aprofundamento
     if (duration <= 5) { numBlocks = 1; }
     else if (duration <= 10) { numBlocks = 2; }
     else if (duration <= 15) { numBlocks = 3; }
-    else if (duration <= 20) { numBlocks = 4; }
-    else if (duration <= 30) { numBlocks = 5; } 
-    else if (duration <= 45) { numBlocks = 7; } 
-    else if (duration >= 60) { numBlocks = 10; } // Blocos de ~6 min cada = Profundidade Extrema
+    else if (duration <= 20) { numBlocks = 3; }
+    else if (duration <= 30) { numBlocks = 4; } 
+    else if (duration <= 45) { numBlocks = 6; } 
+    else if (duration >= 60) { numBlocks = 8; } // ~7.5 min por bloco
     
     const timePerBlockSeconds = Math.floor((duration * 60) / numBlocks);
     
-    // 1. Architect Phase (Gemini 3 Pro) - O Estrategista Espiritual
+    // 1. Architect Phase
     const outlinePrompt = `
-        Você é um Mestre em Oração Guiada, com treinamento em PNL e Hipnose Ericksoniana.
-        Especialista em modelar a autoridade de Jesus Cristo, a sabedoria de Salomão e a adoração de Davi.
+        ATUE COMO: Mestre em Oração Guiada (Certificado em PNL/Hipnose Ericksoniana).
+        MODELAGEM: Autoridade de Jesus Cristo, Sabedoria de Salomão, Adoração de Davi.
         
-        **MISSÃO:** Criar a ESTRUTURA para uma sessão profunda de **${duration} minutos** sobre o tema: "${theme}".
+        **MISSÃO:** Estruturar uma sessão de **${duration} minutos** sobre o tema: "${theme}".
         **ESTILO:** ${type.toUpperCase()}
         
-        **ESTRUTURA DA SESSÃO (Hipnose Espiritual):**
-        Divida a sessão em EXATAMENTE **${numBlocks} ATOS**. O fluxo deve ser uma escada que desce para o espírito e sobe para o céu.
+        **ESTRUTURA (Jornada Espiritual):**
+        Divida em EXATAMENTE **${numBlocks} BLOCOS** lógicos.
         
-        1. **Indução (Salmos & Respiração):** Uso de Salmos (23, 91) para criar segurança e transe leve.
-        2. **Aprofundamento (Metáforas de Jesus):** Parábolas e cura interior. Quebra de padrão.
-        3. **Clímax (Autoridade de Davi):** Guerra espiritual, decretos de milagres, uso de palavras de poder.
-        4. **Integração (Sabedoria de Salomão):** Selando a benção, gratidão antecipada.
-        5. **CTA Poderoso:** Convite para ação no canal "Fé em 10 Minutos de Oração".
+        1. **Início (Indução):** Respiração, Salmos de segurança (91/23), baixar frequência cerebral.
+        2. **Meio (Processo):** Metáforas de cura, milagres de Jesus, quebra de crenças, limpeza.
+        3. **Fim (Ancoragem):** Decretos de vitória (Davi), gratidão, selamento.
+        4. **CTA (Call to Action):** No último bloco, convidar para comentar e se inscrever no canal "Fé em 10 Minutos de Oração".
 
-        Retorne JSON com a estrutura dos blocos.
+        Retorne JSON com a estrutura.
     `;
 
     const outlineResponse = await ai.models.generateContent({
@@ -114,38 +111,41 @@ const generateLongPrayer = async (
 
     const outline = JSON.parse(outlineResponse.text.trim());
     const fullScript: AudioScriptBlock[] = [];
-    let context = `Iniciando Sessão Mestra de ${duration}min: "${outline.title}".`;
+    let context = `Iniciando Oração de ${duration}min: "${outline.title}".`;
 
-    // 2. Writer Phase (Gemini 2.5 Flash) - O Orador Ungido
-    const chunkSize = 2; // Processar em pares para manter coerência
+    // 2. Writer Phase
+    const chunkSize = 2; 
     for (let i = 0; i < outline.blocks.length; i += chunkSize) {
         const chunk = outline.blocks.slice(i, i + chunkSize);
         
         const promises = chunk.map(async (block: any) => {
-            // Alvo de palavras para preencher o tempo sem silêncio constrangedor
+            // Meta de palavras alta para garantir densidade e evitar silêncio excessivo
             const targetWordCount = Math.round((timePerBlockSeconds / 60) * wordsPerMinuteBase);
 
             const blockPrompt = `
-                ATUE COMO: Mestre em Oração Guiada (Modelagem: Jesus/Davi/Salomão + PNL Avançada).
-                ESCREVA O ROTEIRO FALADO para este bloco de ~${Math.round(timePerBlockSeconds/60)} minutos.
+                ATUE COMO: Oração Guiada Mestre (Jesus/Davi + PNL).
+                ESCREVA O TEXTO FALADO para este bloco de ~${Math.round(timePerBlockSeconds/60)} minutos.
                 
                 **DADOS DO BLOCO:**
                 - Tema: ${block.blockTheme}
-                - Instrução: ${block.guidance}
-                - META DE TEXTO: Mínimo de **${targetWordCount} palavras**. (ESCREVA EXTENSIVAMENTE).
+                - Guia: ${block.guidance}
+                - META MÍNIMA: **${targetWordCount} palavras**. (Escreva MUITO, preencha o tempo).
                 
-                **REGRAS DE OURO (FLUXO MESTRE):**
-                1. **FLUXO CONTÍNUO (Sem TDAH):** Não faça frases curtas e picotadas. Use "Loopings Hipnóticos" (ex: "E enquanto você sente essa paz, essa paz se expande, e expandindo ela toca seu coração..."). Conecte tudo.
-                2. **BÍBLIA VIVA:** Cite a Bíblia não como leitura, mas como decreto. "Como disse o Salmista...", "Assim como Jesus ordenou...".
-                3. **SEO & GATILHOS:** Use palavras-chave de alto impacto espiritual: "Milagre Imediato", "Destravar Financeiro", "Cura Divina", "Providência", "Céu Aberto", "Anjos", "Batalha Espiritual".
-                4. **PSICOSFERA:** Descreva a atmosfera. "Sinta o peso da Glória", "O vento do Espírito", "O calor da presença".
-                5. **CTA (Apenas no último bloco):** Convide com autoridade para se inscrever e comentar no canal "Fé em 10 Minutos de Oração".
+                **ESTILO DE LINGUAGEM (CRUCIAL):**
+                - **SIMPLES & PROFUNDO:** Fale como um amigo sábio e íntimo ao pé do ouvido. 
+                - **EVITE ERUDIÇÃO:** Não use termos teológicos complexos, palavras difíceis ou acadêmicas. Use a linguagem do povo, do coração.
+                - **SENSORIAL:** Foque no que a pessoa *sente*, *vê* e *ouve* na imaginação. Use metáforas simples (água, luz, vento, abraço).
+                - **FLUÍDEZ:** Crie "Loopings Hipnóticos". Conecte as frases. "E enquanto você respira... você sente... e sentindo isso...". Sem cortes bruscos.
+                
+                **GATILHOS:**
+                - Use: "Milagre", "Providência", "Destravar", "Cura", "Resposta", "Hoje".
+                - Cite a Bíblia como *decreto vivo*, não leitura.
                 
                 ${styleInstruction}
                 
                 Contexto Anterior: ${context}
 
-                Responda APENAS com o JSON. O texto deve ser pronto para falar.
+                Responda APENAS com o JSON.
             `;
 
             try {
@@ -160,15 +160,14 @@ const generateLongPrayer = async (
                 const blockData = JSON.parse(blockResponse.text.trim()) as AudioScriptBlock;
                 
                 blockData.targetDuration = timePerBlockSeconds;
-                // Limite de segurança para pausas, o engine de áudio gerencia o resto
-                if (blockData.instructions.pauseAfter > 30) blockData.instructions.pauseAfter = 20; 
+                if (blockData.instructions.pauseAfter > 30) blockData.instructions.pauseAfter = 30; 
 
                 return blockData;
             } catch (e) {
                 console.error("Erro ao gerar bloco:", e);
                 return { 
-                    text: "E neste momento de silêncio, Deus trabalha em seu favor... receba a paz que excede todo entendimento... continue respirando Sua graça...", 
-                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 15 },
+                    text: "Continue respirando fundo... sentindo a presença divina te envolver... este é o seu momento de paz...", 
+                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 10 },
                     targetDuration: timePerBlockSeconds 
                 } as AudioScriptBlock;
             }
@@ -186,21 +185,21 @@ const generateLongPrayer = async (
 const getPrayerRecommendationPrompt = (vector: CoherenceVector, chatHistory?: Message[]): string => {
     const historyContext = chatHistory ? formatChatHistoryForPrompt(chatHistory) : '';
     const userStateContext = `
-    Estado Atual (Dissonância detectada):
+    Dissonância Atual:
     - Propósito: ${vector.proposito.dissonancia}%
     - Emocional: ${vector.emocional.dissonancia}%
-    - Financeiro/Recursos: ${vector.recursos.dissonancia}%
+    - Financeiro: ${vector.recursos.dissonancia}%
     `;
 
     return `
-    Você é um Mentor Espiritual Profundo (Modelo Canal "Fé em 10 Minutos").
-    Identifique a maior dor oculta do usuário e sugira UM tema de oração "Clickbait Espiritual" (título poderoso e irresistível).
-    Exemplos: "Oração Urgente para Destravar a Vida Financeira", "Quebra de Maldição Hereditária Agora", "Cura da Ansiedade em 10 Minutos".
+    Atue como um Mentor Espiritual do canal "Fé em 10 Minutos".
+    Sugira UM tema de oração poderoso e atraente ("Clickbait Espiritual" do bem) para a dor atual do usuário.
+    Exemplos: "Oração para Destravar a Vida Financeira Imediatamente", "Cura da Ansiedade e Pânico Agora", "Salmo 91 para Proteção Total".
 
     ${userStateContext}
     ${historyContext}
 
-    Responda APENAS com o título do tema.
+    Responda APENAS com o título.
     `;
 };
 
@@ -226,9 +225,9 @@ export const generateGuidedPrayer = async (theme: string, duration: number, type
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       let styleInstruction = "";
-      if (type === 'diurna') styleInstruction = "ESTILO: DIURNO (Fogo de Elias). Voz firme, autoridade, decretos de vitória para o dia. Energia alta, despertar, conquista, batalha espiritual.";
-      else if (type === 'noturna') styleInstruction = "ESTILO: NOTURNO (Colo do Pai). Voz macia, sussurrada, hipnótica. Salmos de proteção (91), entrega de ansiedade, indução ao sono profundo e reparador.";
-      else styleInstruction = "ESTILO: TERAPÊUTICO (Cura de Jesus). Foco em traumas, perdão, limpeza de memórias. Uso de metáforas de cura, toque divino, ressignificação emocional profunda.";
+      if (type === 'diurna') styleInstruction = "ESTILO: DIURNO. Voz firme, autoridade, energia de despertar. Foco em conquista, proteção para o dia e força.";
+      else if (type === 'noturna') styleInstruction = "ESTILO: NOTURNO. Voz hipnótica, muito lenta, suave e acolhedora. Foco em limpar a mente, segurança, anjos e sono profundo.";
+      else styleInstruction = "ESTILO: TERAPÊUTICO. Voz empática, compassiva e curadora. Foco em tocar nas feridas emocionais com amor, perdão e renovação.";
   
       const historyContext = chatHistory ? formatChatHistoryForPrompt(chatHistory) : '';
       
