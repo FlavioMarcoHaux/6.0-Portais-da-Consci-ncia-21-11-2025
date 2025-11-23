@@ -16,6 +16,7 @@ const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string):
     let frequencies = [146.83, 185.00, 220.00]; // D Minor (Deep/Sad/Ethereal default)
     if (mood === 'warm' || mood === 'nature') frequencies = [146.83, 185.00, 220.00, 293.66]; // D Major ish
     if (mood === 'epic') frequencies = [98.00, 146.83, 196.00]; // G power chord low
+    if (mood === 'deep_focus') frequencies = [110.00, 164.81, 196.00]; // Deep grounding
     
     // Generate simple additive synthesis
     for (let i = 0; i < buffer.length; i++) {
@@ -61,6 +62,31 @@ const createBinauralBuffer = (ctx: BaseAudioContext, duration: number, freqHz: n
     return buffer;
 };
 
+// --- Smart Splitter for Chunking ---
+// Divides long text into smaller chunks based on punctuation to avoid TTS artifacts.
+const splitTextIntoChunks = (text: string): string[] => {
+    // Regex splits by sentence terminators (. ! ? ;) ensuring we don't break mid-sentence.
+    // The capturing group includes the delimiter in the split, so we might need to rejoin or handle logic.
+    // Simple approach: Split by delimiters and keep them.
+    const chunks = text.match(/[^.!?;\n]+[.!?;\n]+/g) || [text];
+    
+    // Merge very short chunks (e.g. "Sim.") with previous to avoid choppy audio
+    const mergedChunks: string[] = [];
+    let current = "";
+    
+    for (const chunk of chunks) {
+        if ((current + chunk).length < 250) {
+            current += " " + chunk;
+        } else {
+            if (current) mergedChunks.push(current.trim());
+            current = chunk;
+        }
+    }
+    if (current) mergedChunks.push(current.trim());
+    
+    return mergedChunks;
+};
+
 export const renderAudioSession = async (
     blocks: AudioScriptBlock[],
     voice: TtsVoice,
@@ -70,21 +96,50 @@ export const renderAudioSession = async (
     const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
     const audioBuffers: AudioBuffer[] = [];
     
-    // 1. Generate TTS Audio for all blocks
+    // 1. Generate TTS Audio for all blocks with CHUNKING logic
+    let totalChunksProcessed = 0;
+    let totalChunksEstimate = blocks.length * 3; // Estimate
+
     for (let i = 0; i < blocks.length; i++) {
-        onProgress((i / blocks.length) * 50); // First 50% is TTS generation
         const block = blocks[i];
-        try {
-            const speech = await generateSpeech(block.text, voice);
-            if (speech?.data) {
-                const audioData = decode(speech.data);
-                const buffer = await decodeAudioData(audioData, tempCtx, sampleRate, 1);
-                audioBuffers.push(buffer);
-            } else {
-                audioBuffers.push(tempCtx.createBuffer(1, sampleRate, sampleRate)); 
+        const textChunks = splitTextIntoChunks(block.text);
+        const blockChunkBuffers: AudioBuffer[] = [];
+
+        // Process chunks for this block
+        for (const chunk of textChunks) {
+            try {
+                const speech = await generateSpeech(chunk, voice);
+                if (speech?.data) {
+                    const audioData = decode(speech.data);
+                    const buffer = await decodeAudioData(audioData, tempCtx, sampleRate, 1);
+                    blockChunkBuffers.push(buffer);
+                }
+                // Update progress
+                totalChunksProcessed++;
+                const currentProgress = Math.min((totalChunksProcessed / totalChunksEstimate) * 60, 60);
+                onProgress(currentProgress);
+            } catch (e) {
+                console.error(`TTS Generation failed for chunk in block ${i}`, e);
+                // Continue without this chunk rather than failing everything
             }
-        } catch (e) {
-            console.error("TTS Generation failed for block", i, e);
+            // Small delay to prevent rate limiting
+            await new Promise(resolve => setTimeout(resolve, 200)); 
+        }
+
+        // STITCHING: Concatenate all chunk buffers into one Block Buffer
+        if (blockChunkBuffers.length > 0) {
+            const totalSamples = blockChunkBuffers.reduce((acc, b) => acc + b.length, 0);
+            const stitchedBuffer = tempCtx.createBuffer(1, totalSamples, sampleRate);
+            const channelData = stitchedBuffer.getChannelData(0);
+            
+            let offset = 0;
+            for (const buffer of blockChunkBuffers) {
+                channelData.set(buffer.getChannelData(0), offset);
+                offset += buffer.length;
+            }
+            audioBuffers.push(stitchedBuffer);
+        } else {
+            // Fallback for empty audio (silence)
             audioBuffers.push(tempCtx.createBuffer(1, sampleRate, sampleRate));
         }
     }
@@ -101,20 +156,16 @@ export const renderAudioSession = async (
         const ttsDuration = buffer.duration;
         
         // --- INTELLIGENT TIME-BOXING LOGIC ---
-        // Se o texto gerado for muito curto, NÃO force um silêncio gigante para preencher o tempo.
-        // Isso evita a sensação de "TDAH" ou desconexão.
-        // Aceitamos que a oração fique um pouco mais curta que o alvo se o conteúdo acabou,
-        // mas mantemos um fluxo musical agradável.
+        // Ensure padding is added but not excessive.
         
-        let pauseDuration = block.instructions.pauseAfter || 5; // Default natural pause
+        let pauseDuration = block.instructions.pauseAfter || 3; // Default natural breath pause
         
         if (block.targetDuration) {
             const remainingTime = block.targetDuration - ttsDuration;
-            // Se sobrar tempo, adicione pausa, MAS com um teto máximo de 20s.
-            // Se o texto foi curto demais, o usuário ouvirá 20s de música e passará para o próximo bloco,
-            // mantendo o fluxo, em vez de esperar 2 minutos no silêncio.
+            // If text was shorter than target time, fill with music (pad) but cap it at 30s to keep flow.
+            // If text was longer, pauseDuration stays minimal (3s).
             if (remainingTime > 0) {
-                pauseDuration = Math.min(remainingTime, 20); 
+                pauseDuration = Math.min(remainingTime, 30); 
             }
         }
         // -------------------------
@@ -127,7 +178,7 @@ export const renderAudioSession = async (
     // Add a tail for decay
     totalSamples = Math.ceil((currentTime + 5) * sampleRate);
 
-    // 3. Offline Rendering
+    // 3. Offline Rendering (Mixing)
     const offlineCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
     
     // A. Render TTS Tracks
@@ -152,12 +203,12 @@ export const renderAudioSession = async (
     const binauralSource = offlineCtx.createBufferSource();
     binauralSource.buffer = binauralBuffer;
     const binauralGain = offlineCtx.createGain();
-    binauralGain.gain.value = 0.05; 
+    binauralGain.gain.value = 0.08; // Slightly increased for effectiveness
     binauralSource.connect(binauralGain);
     binauralGain.connect(offlineCtx.destination);
     
-    // D. Automation
-    musicGain.gain.setValueAtTime(0.3, 0);
+    // D. Automation (Ducking)
+    musicGain.gain.setValueAtTime(0.4, 0); // Base volume
     
     timeline.forEach(item => {
         const speechStart = item.start;
@@ -165,12 +216,12 @@ export const renderAudioSession = async (
         const pauseEnd = speechEnd + item.pauseDuration;
         const intensity = item.block.instructions.intensity;
         
-        // Duck during speech
-        musicGain.gain.linearRampToValueAtTime(0.2 * intensity, speechStart + 0.5); 
-        musicGain.gain.linearRampToValueAtTime(0.2 * intensity, speechEnd - 0.5);
+        // Duck music during speech
+        musicGain.gain.linearRampToValueAtTime(0.25 * intensity, speechStart + 0.2); 
+        musicGain.gain.linearRampToValueAtTime(0.25 * intensity, speechEnd - 0.2);
         
-        // Swell during pause
-        if (item.pauseDuration > 2) {
+        // Swell music during pause
+        if (item.pauseDuration > 3) {
              musicGain.gain.linearRampToValueAtTime(0.5 * intensity, speechEnd + 1);
              musicGain.gain.linearRampToValueAtTime(0.5 * intensity, pauseEnd - 1);
         }
@@ -179,7 +230,7 @@ export const renderAudioSession = async (
     musicSource.start(0);
     binauralSource.start(0);
 
-    onProgress(75);
+    onProgress(80);
 
     // 4. Final Render
     const renderedBuffer = await offlineCtx.startRendering();
