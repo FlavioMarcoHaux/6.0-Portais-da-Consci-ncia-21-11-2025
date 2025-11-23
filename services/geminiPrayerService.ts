@@ -68,16 +68,12 @@ const generateLongPrayer = async (
     // ESTRATÉGIA DE FLUXO DE MESTRE (ATOS PROFUNDOS)
     // Aumentar densidade para 120ppm para garantir que a IA fale bastante e preencha o tempo
     let wordsPerMinuteBase = 120; 
-    let numBlocks = 3;
-
-    // Blocos longos (5-10 min cada) para evitar "TDAH" e permitir aprofundamento
-    if (duration <= 5) { numBlocks = 1; }
-    else if (duration <= 10) { numBlocks = 2; }
-    else if (duration <= 15) { numBlocks = 3; }
-    else if (duration <= 20) { numBlocks = 3; }
-    else if (duration <= 30) { numBlocks = 4; } 
-    else if (duration <= 45) { numBlocks = 6; } 
-    else if (duration >= 60) { numBlocks = 8; } // ~7.5 min por bloco
+    
+    // CRUCIAL: Forçar blocos de 5 minutos (300s) para garantir latência baixa no streaming.
+    // Se o bloco for muito longo (ex: 10 min), o usuário espera demais para o primeiro byte de áudio.
+    // Se for muito curto, perde-se a profundidade. 5 min é o ideal.
+    const idealBlockDuration = 5; // minutes
+    const numBlocks = Math.max(1, Math.ceil(duration / idealBlockDuration));
     
     const timePerBlockSeconds = Math.floor((duration * 60) / numBlocks);
     
@@ -90,10 +86,10 @@ const generateLongPrayer = async (
         **ESTILO:** ${type.toUpperCase()}
         
         **ESTRUTURA (Jornada Espiritual):**
-        Divida em EXATAMENTE **${numBlocks} BLOCOS** lógicos.
+        Divida em EXATAMENTE **${numBlocks} BLOCOS** lógicos de aproximadamente ${idealBlockDuration} minutos cada.
         
         1. **Início (Indução):** Respiração, Salmos de segurança (91/23), baixar frequência cerebral.
-        2. **Meio (Processo):** Metáforas de cura, milagres de Jesus, quebra de crenças, limpeza.
+        2. **Meio (Processo):** Metáforas de cura, milagres de Jesus, quebra de crenças, limpeza. (Vários blocos se necessário).
         3. **Fim (Ancoragem):** Decretos de vitória (Davi), gratidão, selamento.
         4. **CTA (Call to Action):** No último bloco, convidar para comentar e se inscrever no canal "Fé em 10 Minutos de Oração".
 
@@ -114,6 +110,7 @@ const generateLongPrayer = async (
     let context = `Iniciando Oração de ${duration}min: "${outline.title}".`;
 
     // 2. Writer Phase
+    // Processamos em chunks de 2 para não estourar rate limits, mas mantendo velocidade.
     const chunkSize = 2; 
     for (let i = 0; i < outline.blocks.length; i += chunkSize) {
         const chunk = outline.blocks.slice(i, i + chunkSize);

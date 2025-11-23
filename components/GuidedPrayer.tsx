@@ -3,13 +3,197 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useStore } from '../store.ts';
 import { CoherenceVector, AgentId, Session } from '../types.ts';
 import { generateGuidedPrayer, recommendPrayerTheme } from '../services/geminiPrayerService.ts';
-import { renderAudioSession } from '../services/audioEngine.ts';
+import { createAudioStream, AudioStreamController } from '../services/audioEngine.ts';
 import { getFriendlyErrorMessage } from '../utils/errorUtils.ts';
-import { X, Sparkles, BookOpen, Volume2, Loader2, Download, RefreshCw, Sun, Moon, Brain, Play, Pause } from 'lucide-react';
+import { X, BookOpen, Loader2, Download, RefreshCw, Sun, Moon, Brain, Play, Pause, Zap, Settings2, FastForward, Rewind } from 'lucide-react';
 
 interface GuidedPrayerProps {
     onExit: (isManual: boolean, result?: any) => void;
 }
+
+// --- Advanced Player Component ---
+interface AdvancedPlayerProps {
+    src: string;
+    onReset: () => void;
+    onFinish: () => void;
+    theme: string;
+    duration: number;
+}
+
+const AdvancedAudioPlayer: React.FC<AdvancedPlayerProps> = ({ src, onReset, onFinish, theme, duration }) => {
+    const audioRef = useRef<HTMLAudioElement>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [totalDuration, setTotalDuration] = useState(0);
+    const [playbackRate, setPlaybackRate] = useState(1.0);
+    const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+
+    const formatTime = (time: number) => {
+        const minutes = Math.floor(time / 60);
+        const seconds = Math.floor(time % 60);
+        return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+    };
+
+    const togglePlay = () => {
+        if (audioRef.current) {
+            if (isPlaying) {
+                audioRef.current.pause();
+            } else {
+                audioRef.current.play();
+            }
+            setIsPlaying(!isPlaying);
+        }
+    };
+
+    const handleTimeUpdate = () => {
+        if (audioRef.current) {
+            setCurrentTime(audioRef.current.currentTime);
+        }
+    };
+
+    const handleLoadedMetadata = () => {
+        if (audioRef.current) {
+            setTotalDuration(audioRef.current.duration);
+        }
+    };
+
+    const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const time = parseFloat(e.target.value);
+        if (audioRef.current) {
+            audioRef.current.currentTime = time;
+            setCurrentTime(time);
+        }
+    };
+
+    const changeSpeed = (rate: number) => {
+        if (audioRef.current) {
+            audioRef.current.playbackRate = rate;
+            setPlaybackRate(rate);
+            setShowSpeedMenu(false);
+        }
+    };
+
+    const skip = (seconds: number) => {
+        if (audioRef.current) {
+            audioRef.current.currentTime += seconds;
+        }
+    };
+
+    return (
+        <div className="w-full bg-gray-800/90 backdrop-blur-md rounded-2xl p-6 border border-yellow-500/30 shadow-2xl animate-fade-in">
+            <audio
+                ref={audioRef}
+                src={src}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                onEnded={() => setIsPlaying(false)}
+            />
+
+            {/* Title Area */}
+            <div className="text-center mb-6">
+                <h3 className="text-yellow-400 text-xs font-bold uppercase tracking-widest mb-1">Tocando Agora</h3>
+                <h2 className="text-white text-xl font-bold line-clamp-1">{theme}</h2>
+            </div>
+
+            {/* Waveform Visualization (Static Placeholder for aesthetic) */}
+            <div className="flex items-center justify-center gap-1 h-12 mb-6 opacity-50">
+                {[...Array(20)].map((_, i) => (
+                    <div 
+                        key={i} 
+                        className="w-1 bg-yellow-500 rounded-full transition-all duration-300"
+                        style={{ 
+                            height: isPlaying ? `${Math.random() * 100}%` : '20%',
+                            opacity: Math.random() * 0.5 + 0.5 
+                        }}
+                    />
+                ))}
+            </div>
+
+            {/* Progress Bar */}
+            <div className="mb-4">
+                <input
+                    type="range"
+                    min="0"
+                    max={totalDuration || 100}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-yellow-500 hover:accent-yellow-400"
+                />
+                <div className="flex justify-between text-xs text-gray-400 mt-2 font-mono">
+                    <span>{formatTime(currentTime)}</span>
+                    <span>{formatTime(totalDuration)}</span>
+                </div>
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center justify-between relative">
+                {/* Speed Control */}
+                <div className="relative">
+                    <button 
+                        onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                        className="text-xs font-bold text-yellow-500 bg-yellow-500/10 px-3 py-1.5 rounded-lg hover:bg-yellow-500/20 transition-colors"
+                    >
+                        {playbackRate}x
+                    </button>
+                    {showSpeedMenu && (
+                        <div className="absolute bottom-full left-0 mb-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden flex flex-col min-w-[80px] z-20">
+                            {[0.75, 1.0, 1.25, 1.5, 1.75].map(rate => (
+                                <button
+                                    key={rate}
+                                    onClick={() => changeSpeed(rate)}
+                                    className={`px-4 py-2 text-sm text-left hover:bg-gray-800 ${playbackRate === rate ? 'text-yellow-400 font-bold' : 'text-gray-300'}`}
+                                >
+                                    {rate}x
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Playback Buttons */}
+                <div className="flex items-center gap-6">
+                    <button onClick={() => skip(-10)} className="text-gray-400 hover:text-white transition-colors">
+                        <Rewind size={24} />
+                    </button>
+                    
+                    <button 
+                        onClick={togglePlay}
+                        className="w-16 h-16 bg-yellow-500 hover:bg-yellow-400 text-black rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                    >
+                        {isPlaying ? <Pause size={32} fill="black" /> : <Play size={32} fill="black" className="ml-1" />}
+                    </button>
+
+                    <button onClick={() => skip(10)} className="text-gray-400 hover:text-white transition-colors">
+                        <FastForward size={24} />
+                    </button>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2">
+                    <a 
+                        href={src} 
+                        download={`Oração - ${theme}.wav`}
+                        className="p-2 text-gray-400 hover:text-yellow-400 transition-colors"
+                        title="Baixar"
+                    >
+                        <Download size={20} />
+                    </a>
+                </div>
+            </div>
+
+            <div className="mt-8 pt-4 border-t border-gray-700/50 flex justify-between items-center">
+                <button onClick={onReset} className="text-sm text-gray-500 hover:text-white flex items-center gap-2">
+                    <RefreshCw size={14} /> Nova Oração
+                </button>
+                <button onClick={onFinish} className="text-sm font-bold text-green-400 hover:text-green-300">
+                    Concluir Sessão
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// --- Main Component ---
 
 const getPrayerSuggestions = (vector: CoherenceVector): string[] => {
     const suggestions: { key: keyof Omit<CoherenceVector, 'alinhamentoPAC'>, value: number, themes: string[] }[] = [
@@ -41,26 +225,33 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
     const chatHistory = agentIdForContext ? (chatHistories[agentIdForContext] || []) : [];
 
     const [isAutoSuggesting, setIsAutoSuggesting] = useState(false);
-    const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-    const [isPlaying, setIsPlaying] = useState(false);
+    const [isPlayingStream, setIsPlayingStream] = useState(false); // For the simplified stream player
+    const [isReadyToPlay, setIsReadyToPlay] = useState(false); 
+    const [isDownloadReady, setIsDownloadReady] = useState(false);
+    const [isStartingAudio, setIsStartingAudio] = useState(false); // Feedback imediato
     
     // New State for Options
     const [duration, setDuration] = useState(15);
     const [prayerType, setPrayerType] = useState<'diurna' | 'noturna' | 'terapeutica'>('diurna');
     
-    const audioRef = useRef<HTMLAudioElement>(null);
+    // Audio Engine Ref
+    const streamControllerRef = useRef<AudioStreamController | null>(null);
+    
     const wasAutoStarted = useRef(false);
     const hasConsumedInitialTheme = useRef(false);
 
     const suggestions = useMemo(() => getPrayerSuggestions(coherenceVector), [coherenceVector]);
 
     const handleGenerate = useCallback(async (inputTheme: string) => {
-        // Explicitly clear audioDataUrl before updating state to ensure browser releases memory
+        // Cleanup previous audio if exists
         if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
             URL.revokeObjectURL(audioDataUrl);
         }
         
         updateState({ state: 'generating', error: null, blocks: [], audioDataUrl: null, progress: 0 });
+        setIsReadyToPlay(false);
+        setIsDownloadReady(false);
+        setIsStartingAudio(false);
         
         try {
             const generatedBlocks = await generateGuidedPrayer(inputTheme, duration, prayerType, chatHistory);
@@ -71,30 +262,51 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         }
     }, [chatHistory, updateState, duration, prayerType, audioDataUrl]);
 
-    const handleGenerateAudio = useCallback(async () => {
+    const handleStartStream = useCallback(async () => {
         if (!blocks || blocks.length === 0) return;
-        setIsGeneratingAudio(true);
         
-        if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
-            URL.revokeObjectURL(audioDataUrl);
+        // Initialize Blade Runner Engine
+        if (streamControllerRef.current) {
+            streamControllerRef.current.close();
         }
+        streamControllerRef.current = createAudioStream();
+        
         updateState({ audioDataUrl: null, error: null, progress: 0 });
+        setIsStartingAudio(true); 
+        setIsReadyToPlay(false);
+        setIsDownloadReady(false);
+        setIsPlayingStream(true); 
         
         try {
             const voiceName = prayerType === 'diurna' ? 'Kore' : (prayerType === 'noturna' ? 'Fenrir' : 'Zephyr');
             
-            const url = await renderAudioSession(blocks, voiceName, (p) => {
-                updateState({ progress: p });
-            });
+            await streamControllerRef.current.startStream(
+                blocks, 
+                voiceName, 
+                (p) => updateState({ progress: p }), // On Progress
+                () => {
+                    // On Ready To Play (First Chunk Ready)
+                    setIsReadyToPlay(true);
+                    setIsStartingAudio(false); 
+                }
+            );
             
-            updateState({ audioDataUrl: url, error: null });
+            // Finished
+            const downloadUrl = await streamControllerRef.current.getDownloadUrl();
+            updateState({ audioDataUrl: downloadUrl, progress: 100 });
+            
+            // Switch to Advanced Player mode logic
+            setIsDownloadReady(true);
+            setIsPlayingStream(false); // Stop stream indicator, let advanced player take over if needed
+            streamControllerRef.current.close(); // Close stream context to free resources for HTML5 audio
+            
         } catch (err) {
-            const friendlyError = getFriendlyErrorMessage(err, "Falha ao renderizar o áudio.");
+            const friendlyError = getFriendlyErrorMessage(err, "Falha no streaming de áudio.");
             updateState({ error: friendlyError });
-        } finally {
-            setIsGeneratingAudio(false);
+            setIsPlayingStream(false);
+            setIsStartingAudio(false);
         }
-    }, [blocks, updateState, prayerType, audioDataUrl]);
+    }, [blocks, updateState, prayerType]);
 
     useEffect(() => {
         const session = currentSession as Extract<Session, { type: 'guided_prayer' }>;
@@ -105,11 +317,13 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
             wasAutoStarted.current = true;
             setIsAutoSuggesting(false);
             hasConsumedInitialTheme.current = true;
+            setIsReadyToPlay(true);
+            setIsDownloadReady(true);
             return;
         }
 
         if (state !== 'config') return;
-        if (hasConsumedInitialTheme.current) return; // Don't re-apply theme if we manually reset
+        if (hasConsumedInitialTheme.current) return;
 
         const recommendAndFetch = async () => {
             if (session?.autoStart && session.initialTheme) {
@@ -143,27 +357,23 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         recommendAndFetch();
     }, [currentSession, coherenceVector, chatHistory, handleGenerate, state, updateState]);
 
+    // Auto-start stream if auto-started session
     useEffect(() => {
-        if (blocks && blocks.length > 0 && wasAutoStarted.current) {
-            handleGenerateAudio();
+        if (blocks && blocks.length > 0 && wasAutoStarted.current && !isDownloadReady) {
+            handleStartStream();
             wasAutoStarted.current = false; 
         }
-    }, [blocks, handleGenerateAudio]);
+    }, [blocks, handleStartStream, isDownloadReady]);
 
-    // Auto-play when audio is ready if it was requested
-    useEffect(() => {
-        if (audioDataUrl && audioRef.current) {
-            // Reset playback state
-            setIsPlaying(false);
-        }
-    }, [audioDataUrl]);
-
-
+    // Cleanup
     useEffect(() => {
         const url = audioDataUrl;
         return () => {
             if (url && url.startsWith('blob:')) {
                 URL.revokeObjectURL(url);
+            }
+            if (streamControllerRef.current) {
+                streamControllerRef.current.close();
             }
         };
     }, [audioDataUrl]);
@@ -172,9 +382,12 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
             URL.revokeObjectURL(audioDataUrl);
         }
+        if (streamControllerRef.current) {
+            streamControllerRef.current.close();
+            streamControllerRef.current = null;
+        }
         hasConsumedInitialTheme.current = true;
         
-        // Force a clean state update
         setToolState('guidedPrayer', (prev) => ({
             ...prev!, 
             state: 'config', 
@@ -186,17 +399,21 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         }));
         
         wasAutoStarted.current = false;
-        setIsPlaying(false);
+        setIsPlayingStream(false);
+        setIsReadyToPlay(false);
+        setIsDownloadReady(false);
+        setIsStartingAudio(false);
     };
     
-    const togglePlay = () => {
-        if (!audioRef.current) return;
-        if (isPlaying) {
-            audioRef.current.pause();
+    const toggleStreamPlay = () => {
+        if (!streamControllerRef.current) return;
+        
+        if (isPlayingStream) {
+            streamControllerRef.current.pause();
         } else {
-            audioRef.current.play();
+            streamControllerRef.current.resume();
         }
-        setIsPlaying(!isPlaying);
+        setIsPlayingStream(!isPlayingStream);
     };
 
     const handleFinishSession = () => {
@@ -281,14 +498,12 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                      </div>
                 );
             case 'generating':
-                const isLong = duration >= 30;
                 return (
                     <div className="flex-1 flex flex-col items-center justify-center p-4">
                         <div className="flex flex-col items-center text-center max-w-md">
                             <Loader2 className="w-12 h-12 animate-spin text-yellow-400" />
                             <h3 className="text-xl font-bold text-yellow-300 mt-6">Canalizando sua Oração</h3>
                             <p className="mt-4 text-gray-300">O "Arquiteto da Fé" está estruturando uma jornada profunda de {duration} minutos com foco em '{theme}'...</p>
-                            {isLong && <p className="text-xs text-gray-500 mt-4 animate-pulse">Sessões longas exigem mais tempo para garantir a densidade do conteúdo. Por favor, aguarde.</p>}
                         </div>
                     </div>
                 );
@@ -301,76 +516,92 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                     </div>
                 );
             case 'display':
+                const isStreaming = (progress! > 0 && progress! < 100) || isStartingAudio;
+
                 return (
                     <div className="flex-1 flex flex-col h-full min-h-0 p-4 sm:p-6 overflow-hidden animate-fade-in">
-                        <div className="w-full max-w-3xl mx-auto text-center flex flex-col h-full" key={audioDataUrl || 'no-audio'}>
-                            <h2 className="text-2xl font-bold text-center mb-4 text-yellow-300 flex-shrink-0">Intenção: "{theme}"</h2>
+                        <div className="w-full max-w-3xl mx-auto text-center flex flex-col h-full">
+                            
+                            {/* Phase 1: Start / Streaming / Loading */}
+                            {!isDownloadReady && (
+                                <>
+                                    <h2 className="text-2xl font-bold text-center mb-4 text-yellow-300 flex-shrink-0">Intenção: "{theme}"</h2>
+                                    <div className="mb-6 p-6 bg-gray-800/60 rounded-2xl flex flex-col items-center gap-4 flex-shrink-0 border border-yellow-500/20 shadow-lg relative overflow-hidden">
+                                        {!isReadyToPlay && !isStreaming && (
+                                            <button onClick={handleStartStream} className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-4 px-8 rounded-full flex items-center justify-center transition-colors shadow-lg text-lg group">
+                                                <Zap size={24} className="mr-3 text-yellow-400 group-hover:animate-pulse" />
+                                                Iniciar Experiência ({duration} min)
+                                            </button>
+                                        )}
 
-                            {!audioDataUrl && !isGeneratingAudio && blocks.length > 0 && (
-                                <div className="mb-4 flex-shrink-0">
-                                    <button onClick={handleGenerateAudio} className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-full flex items-center justify-center mx-auto transition-colors shadow-lg">
-                                        <Volume2 size={20} className="mr-2" />
-                                        Produzir Experiência de Áudio ({duration} min)
-                                    </button>
-                                </div>
-                            )}
-                            {isGeneratingAudio && (
-                                <div className="mb-4 w-full max-w-sm mx-auto flex-shrink-0">
-                                    <div className="flex justify-between items-center text-sm text-gray-400 mb-1">
-                                        <span>Mixando áudio (Voz + Música)...</span>
-                                        <span>{Math.round(progress || 0)}%</span>
+                                        {(isStreaming || isReadyToPlay) && (
+                                            <>
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <Loader2 size={16} className="animate-spin text-yellow-400" />
+                                                    <span className="text-xs font-bold text-yellow-400 uppercase tracking-widest">
+                                                        {isStartingAudio ? 'Conectando com o fluxo...' : 'Gerando...'}
+                                                    </span>
+                                                </div>
+
+                                                <div className="relative">
+                                                    <button 
+                                                        onClick={toggleStreamPlay} 
+                                                        disabled={isStartingAudio}
+                                                        className="w-20 h-20 bg-yellow-500 hover:bg-yellow-400 disabled:bg-yellow-500/50 disabled:cursor-not-allowed text-black rounded-full flex items-center justify-center transition-transform hover:scale-105 shadow-xl relative z-10"
+                                                    >
+                                                        {isPlayingStream ? <Pause size={40} /> : <Play size={40} className="ml-1" />}
+                                                    </button>
+                                                </div>
+
+                                                <div className="w-full max-w-sm mt-4">
+                                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                                        <span>Construindo Áudio</span>
+                                                        <span>{Math.round(progress || 0)}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden relative">
+                                                        <div 
+                                                            className="bg-yellow-500 h-1.5 rounded-full transition-all duration-300 relative z-10" 
+                                                            style={{ width: `${progress || 0}%` }}
+                                                        >
+                                                            {isStreaming && <div className="absolute inset-0 bg-white/30 animate-pulse"></div>}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
-                                    <div className="w-full bg-gray-700 rounded-full h-2.5">
-                                        <div className="bg-yellow-500 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress || 0}%` }}></div>
-                                    </div>
-                                </div>
+                                </>
                             )}
 
-                            {audioDataUrl && (
-                                <div className="mb-4 p-4 bg-gray-800/60 rounded-lg animate-fade-in flex flex-col items-center gap-4 flex-shrink-0 border border-yellow-500/20">
-                                    <audio
-                                        ref={audioRef}
-                                        src={audioDataUrl}
-                                        onEnded={() => setIsPlaying(false)}
-                                        className="hidden"
+                            {/* Phase 2: Advanced Player (Ready) */}
+                            {isDownloadReady && audioDataUrl && (
+                                <div className="mb-6">
+                                    <AdvancedAudioPlayer 
+                                        src={audioDataUrl} 
+                                        onReset={handleReset} 
+                                        onFinish={handleFinishSession}
+                                        theme={theme}
+                                        duration={duration * 60} // Approx duration for visuals
                                     />
-                                    <div className="flex items-center gap-6">
-                                         <button onClick={togglePlay} className="w-16 h-16 bg-yellow-500 hover:bg-yellow-400 text-black rounded-full flex items-center justify-center transition-transform hover:scale-105 shadow-lg">
-                                            {isPlaying ? <Pause size={32} /> : <Play size={32} className="ml-1" />}
-                                         </button>
-                                    </div>
-                                    <a 
-                                        href={audioDataUrl} 
-                                        download={`Oração - ${theme}.wav`}
-                                        className="text-sm text-gray-400 hover:text-white flex items-center gap-2 transition-colors"
-                                    >
-                                        <Download size={16} />
-                                        Baixar Arquivo de Áudio ({duration}min)
-                                    </a>
                                 </div>
                             )}
                             
-                            <div className="bg-gray-900/50 p-6 rounded-lg overflow-y-auto text-left flex-1 min-h-0 border border-gray-800" data-readable-content>
-                                 {blocks.map((block, i) => (
-                                    <div key={i} className="mb-6">
-                                        <p className="whitespace-pre-wrap text-gray-200 leading-relaxed text-lg font-serif">{block.text}</p>
-                                        <div className="text-xs text-gray-600 mt-2 italic flex gap-2">
-                                            <span>Mood: {block.instructions.mood}</span>
-                                            <span>•</span>
-                                            <span>Intensidade: {block.instructions.intensity}</span>
-                                            <span>•</span>
-                                            <span>Time-Box: {block.targetDuration || 'Auto'}s</span>
+                            {/* Text Content - Only show if not in full player mode or if user wants to read */}
+                            {!isDownloadReady && (
+                                <div className="bg-gray-900/50 p-6 rounded-lg overflow-y-auto text-left flex-1 min-h-0 border border-gray-800 shadow-inner" data-readable-content>
+                                     {blocks.map((block, i) => (
+                                        <div key={i} className="mb-6 animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
+                                            <p className="whitespace-pre-wrap text-gray-200 leading-relaxed text-lg font-serif opacity-90">{block.text}</p>
                                         </div>
-                                    </div>
-                                 ))}
-                            </div>
+                                     ))}
+                                </div>
+                            )}
                             
-                            <div className="text-center mt-6 flex items-center justify-center gap-4 flex-shrink-0">
-                                <button onClick={handleReset} className="text-yellow-400 font-semibold flex items-center gap-2"><RefreshCw size={16} />Nova Oração</button>
-                                <button onClick={handleFinishSession} className="bg-yellow-600 text-black font-bold py-2 px-6 rounded-full">
-                                    Concluir Sessão
-                                </button>
-                            </div>
+                            {!isDownloadReady && (
+                                <div className="text-center mt-6 flex items-center justify-center gap-4 flex-shrink-0">
+                                    <button onClick={handleReset} className="text-yellow-400 font-semibold flex items-center gap-2"><RefreshCw size={16} />Nova Oração</button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 );

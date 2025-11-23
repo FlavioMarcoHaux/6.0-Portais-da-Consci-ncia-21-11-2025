@@ -3,7 +3,7 @@ import { AudioScriptBlock } from '../types.ts';
 import { generateSpeech, TtsVoice } from './geminiTtsService.ts';
 import { decode, decodeAudioData } from '../utils/audioUtils.ts';
 
-// --- Sound Synthesis Helpers ---
+// --- Sound Synthesis Helpers (Pad & Binaural) ---
 
 const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string): AudioBuffer => {
     const sampleRate = ctx.sampleRate;
@@ -21,11 +21,13 @@ const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string):
         const t = i / sampleRate;
         
         frequencies.forEach(f => {
+            // Osciladores simples com leve detune para efeito "chorus"
             sample += Math.sin(2 * Math.PI * f * t) * 0.1;
             sample += Math.sin(2 * Math.PI * (f * 1.01) * t) * 0.1; 
-            sample += (Math.random() * 2 - 1) * 0.005;
+            sample += (Math.random() * 2 - 1) * 0.005; // Noise floor
         });
 
+        // Envelope suave (Fade In/Out) para evitar cliques
         let envelope = 1;
         if (t < 2) envelope = t / 2;
         if (t > duration - 2) envelope = (duration - t) / 2;
@@ -53,17 +55,15 @@ const createBinauralBuffer = (ctx: BaseAudioContext, duration: number, freqHz: n
     return buffer;
 };
 
-// --- Smart Splitter for Chunking ---
-// Divides long text into smaller chunks to maintain TTS quality
+// --- Utility: Text Chunking ---
 const splitTextIntoChunks = (text: string): string[] => {
-    // Split by sentence terminators to keep intonation natural
+    // Divide por pontuação para manter a entonação natural do TTS
     const chunks = text.match(/[^.!?;\n]+[.!?;\n]+/g) || [text];
-    
     const mergedChunks: string[] = [];
     let current = "";
     
     for (const chunk of chunks) {
-        // Keep chunks around ~300 chars for optimal TTS speed/quality balance
+        // Mantém pedaços em torno de 300 caracteres para otimizar latência do TTS
         if ((current + chunk).length < 300) {
             current += " " + chunk;
         } else {
@@ -72,13 +72,12 @@ const splitTextIntoChunks = (text: string): string[] => {
         }
     }
     if (current) mergedChunks.push(current.trim());
-    
     return mergedChunks.length > 0 ? mergedChunks : [text];
 };
 
-// Stitch multiple audio buffers into one continuous buffer
+// --- Utility: Buffer Stitching ---
 const stitchBuffers = (ctx: AudioContext, buffers: AudioBuffer[]): AudioBuffer => {
-    if (buffers.length === 0) return ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); // 1s silence
+    if (buffers.length === 0) return ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const totalLength = buffers.reduce((acc, b) => acc + b.length, 0);
     const result = ctx.createBuffer(1, totalLength, ctx.sampleRate);
     const data = result.getChannelData(0);
@@ -88,182 +87,341 @@ const stitchBuffers = (ctx: AudioContext, buffers: AudioBuffer[]): AudioBuffer =
         offset += b.length;
     }
     return result;
-}
+};
 
-// Helper for WAV header
+// --- WAV Encoding Helpers ---
 function writeString(view: DataView, offset: number, string: string) {
   for (let i = 0; i < string.length; i++) {
     view.setUint8(offset + i, string.charCodeAt(i));
   }
 }
 
-export const renderAudioSession = async (
-    blocks: AudioScriptBlock[],
-    voice: TtsVoice,
-    onProgress: (progress: number) => void
-): Promise<string> => {
-    const sampleRate = 24000; 
-    // Temporary context for decoding. Closed after use.
-    const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
-    
-    // Store raw PCM data (Int16) instead of AudioBuffers to save RAM
-    const pcmChunks: Uint8Array[] = [];
-    
-    const totalSteps = blocks.length; 
+// --- BLADE RUNNER ENGINE: Audio Stream Controller ---
 
-    for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i];
+export class AudioStreamController {
+    private audioContext: AudioContext;
+    private nextStartTime: number = 0;
+    private sampleRate = 24000;
+    
+    // OPFS (Storage)
+    private fileHandle: FileSystemFileHandle | null = null;
+    private writable: FileSystemWritableFileStream | null = null;
+    private totalBytesWritten = 0;
+    private useOPFS = true;
+    private memoryBuffer: Uint8Array[] = []; // Fallback RAM buffer
+
+    // State
+    public isProcessing = false;
+    private onProgressCallback: (p: number) => void = () => {};
+    private onReadyToPlayCallback: () => void = () => {};
+    
+    constructor() {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: this.sampleRate });
+    }
+
+    /**
+     * Inicializa o sistema de arquivos privado (OPFS) para gravação direta em disco.
+     */
+    private async initStorage() {
+        try {
+            const root = await navigator.storage.getDirectory();
+            // Cria um arquivo temporário único para esta sessão
+            const fileName = `prayer_stream_${Date.now()}.wav`;
+            this.fileHandle = await root.getFileHandle(fileName, { create: true });
+            
+            // @ts-ignore - TypeScript definitions might be outdated for OPFS
+            this.writable = await this.fileHandle.createWritable();
+            
+            // Escreve o cabeçalho WAV (Placeholder de 44 bytes)
+            // Preencheremos os tamanhos corretos ao finalizar (seek).
+            const header = new Uint8Array(44); 
+            await this.writable?.write(header);
+            
+            this.totalBytesWritten = 0;
+            console.log("🚀 Blade Runner Engine: OPFS Storage Initialized.");
+        } catch (e) {
+            console.warn("⚠️ OPFS não suportado ou falhou. Usando fallback de RAM.", e);
+            this.useOPFS = false;
+            this.memoryBuffer = [];
+        }
+    }
+
+    /**
+     * Inicia o pipeline de geração, streaming e gravação.
+     */
+    public async startStream(
+        blocks: AudioScriptBlock[], 
+        voice: TtsVoice, 
+        onProgress: (p: number) => void,
+        onReadyToPlay: () => void
+    ) {
+        this.isProcessing = true;
+        this.onProgressCallback = onProgress;
+        this.onReadyToPlayCallback = onReadyToPlay;
         
-        // 1. Text Chunking & TTS Generation
+        await this.initStorage();
+        
+        if (this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+        }
+        this.nextStartTime = this.audioContext.currentTime + 0.5; // Pequeno buffer inicial
+
+        let completedBlocks = 0;
+        
+        for (let i = 0; i < blocks.length; i++) {
+            // Pipeline: Texto -> TTS -> Mixagem -> PCM
+            const pcmData = await this.processBlock(blocks[i], voice);
+            
+            if (pcmData) {
+                // Bifurcação do Pipeline:
+                
+                // 1. Caminho A: Playback Imediato (AudioContext)
+                await this.schedulePlayback(pcmData);
+                if (i === 0) this.onReadyToPlayCallback(); // Avisa UI que pode tocar
+
+                // 2. Caminho B: Gravação em Disco (OPFS)
+                await this.writeChunk(pcmData);
+            }
+
+            completedBlocks++;
+            this.onProgressCallback((completedBlocks / blocks.length) * 100);
+            
+            // Yield para UI não travar
+            await new Promise(r => setTimeout(r, 20));
+        }
+
+        await this.finalizeStorage();
+        this.isProcessing = false;
+    }
+
+    /**
+     * Processa um bloco de texto: TTS -> Mixagem com Música -> PCM Raw
+     */
+    private async processBlock(block: AudioScriptBlock, voice: TtsVoice): Promise<Float32Array | null> {
+        // 1. Chunking e TTS
         const textChunks = splitTextIntoChunks(block.text);
+        // Decodificador temporário
+        const tempCtx = new OfflineAudioContext(1, 48000, this.sampleRate); // Dummy para ter acesso a decodeAudioData
         const blockChunkBuffers: AudioBuffer[] = [];
 
         for (const chunk of textChunks) {
             try {
-                // Retry logic
                 let attempts = 0;
                 let success = false;
                 while(attempts < 3 && !success) {
                     try {
                         const speech = await generateSpeech(chunk, voice);
                         if (speech?.data) {
+                            // Precisamos usar um AudioContext real para decodificar
                             const audioData = decode(speech.data);
-                            const buffer = await decodeAudioData(audioData, tempCtx, sampleRate, 1);
+                            const buffer = await decodeAudioData(audioData, this.audioContext, this.sampleRate, 1);
                             blockChunkBuffers.push(buffer);
                             success = true;
                         } else {
-                            throw new Error("Empty response");
+                            throw new Error("Empty TTS response");
                         }
                     } catch(e) {
                         attempts++;
                         await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
                     }
                 }
-            } catch (e) {
-                console.error(`TTS Chunk failed in block ${i}`);
-            }
-            // Small delay to prevent rate limits
-            await new Promise(resolve => setTimeout(resolve, 50)); 
+            } catch (e) { console.error("TTS failed for chunk", e); }
+            await new Promise(r => setTimeout(r, 50)); // Rate limit throttle
         }
 
-        // 2. Stitch chunks into a single voice track for this block
-        const voiceBuffer = stitchBuffers(tempCtx, blockChunkBuffers);
+        if (blockChunkBuffers.length === 0) return null;
+
+        const voiceBuffer = stitchBuffers(this.audioContext, blockChunkBuffers);
         
-        // 3. Calculate Timings
+        // 2. Timings e Música
         const voiceDuration = voiceBuffer.duration;
-        
-        // Dynamic Pause Logic: 
-        // If text is short but target duration is long, fill with music.
-        // But cap silence at 30s to avoid "dead air" sensation.
-        let pauseDuration = block.instructions.pauseAfter || 2; 
-        
+        let pauseDuration = block.instructions.pauseAfter || 2;
         if (block.targetDuration) {
-            const remainingTime = block.targetDuration - voiceDuration;
-            if (remainingTime > 0) {
-                pauseDuration = Math.min(remainingTime, 30); // Cap silence at 30s
-            }
+            const remaining = block.targetDuration - voiceDuration;
+            if (remaining > 0) pauseDuration = Math.min(remaining, 30); // Cap silence at 30s
         }
         
-        const blockTotalDuration = voiceDuration + pauseDuration;
-        // Ensure at least minimal duration
-        const safeDuration = Math.max(blockTotalDuration, voiceDuration + 1); 
-        const blockTotalSamples = Math.ceil(safeDuration * sampleRate);
+        const totalDuration = Math.max(voiceDuration + pauseDuration, voiceDuration + 1);
+        const totalSamples = Math.ceil(totalDuration * this.sampleRate);
 
-        // 4. Mix Voice + Music (Offline)
-        // Processing block-by-block keeps RAM usage low
-        const offlineCtx = new OfflineAudioContext(2, blockTotalSamples, sampleRate);
+        // 3. Mixagem Offline (Voice + Music)
+        // Usamos OfflineAudioContext para renderizar rápido sem tocar
+        const offlineCtx = new OfflineAudioContext(2, totalSamples, this.sampleRate);
         
-        // Voice Track
+        // Voz
         const voiceSource = offlineCtx.createBufferSource();
         voiceSource.buffer = voiceBuffer;
         voiceSource.connect(offlineCtx.destination);
         voiceSource.start(0);
         
-        // Music Track
-        const musicBuffer = createPadBuffer(offlineCtx, safeDuration, block.instructions.mood);
+        // Música (Gerada proceduralmente para economizar banda)
+        const musicBuffer = createPadBuffer(offlineCtx, totalDuration, block.instructions.mood);
         const musicSource = offlineCtx.createBufferSource();
         musicSource.buffer = musicBuffer;
         const musicGain = offlineCtx.createGain();
         
-        // Ducking (Volume automation)
+        // Automação de Volume (Ducking)
         const intensity = block.instructions.intensity || 0.5;
         const duckVol = 0.15 * intensity;
         const fullVol = 0.4 * intensity;
         
         musicGain.gain.setValueAtTime(0.3 * intensity, 0);
-        musicGain.gain.linearRampToValueAtTime(duckVol, 0.5); // Fade down for voice
-        if (voiceDuration > 1) {
-            musicGain.gain.setValueAtTime(duckVol, voiceDuration - 0.5); 
-        }
-        musicGain.gain.linearRampToValueAtTime(fullVol, voiceDuration + 0.5); // Swell up after voice
+        musicGain.gain.linearRampToValueAtTime(duckVol, 0.5);
+        if (voiceDuration > 1) musicGain.gain.setValueAtTime(duckVol, voiceDuration - 0.5);
+        musicGain.gain.linearRampToValueAtTime(fullVol, voiceDuration + 0.5);
         
         musicSource.connect(musicGain);
         musicGain.connect(offlineCtx.destination);
         musicSource.start(0);
-        
-        // Binaural Track (Optional)
+
+        // Binaural
         if (block.instructions.binauralFreq) {
-            const binBuffer = createBinauralBuffer(offlineCtx, safeDuration, block.instructions.binauralFreq);
+            const binBuffer = createBinauralBuffer(offlineCtx, totalDuration, block.instructions.binauralFreq);
             const binSource = offlineCtx.createBufferSource();
             binSource.buffer = binBuffer;
             const binGain = offlineCtx.createGain();
-            binGain.gain.value = 0.06; 
+            binGain.gain.value = 0.06;
             binSource.connect(binGain);
             binGain.connect(offlineCtx.destination);
             binSource.start(0);
         }
+
+        const renderedBuffer = await offlineCtx.startRendering();
         
-        const renderedBlock = await offlineCtx.startRendering();
-        
-        // 5. Convert to PCM Int16 immediately to free memory
-        const L = renderedBlock.getChannelData(0);
-        const R = renderedBlock.getChannelData(1);
-        const interleaved = new Int16Array(L.length * 2);
-        
-        for (let s = 0; s < L.length; s++) {
-            // Clip and convert
-            const pcmL = Math.max(-1, Math.min(1, L[s]));
-            const pcmR = Math.max(-1, Math.min(1, R[s]));
-            interleaved[s * 2] = pcmL < 0 ? pcmL * 0x8000 : pcmL * 0x7FFF;
-            interleaved[s * 2 + 1] = pcmR < 0 ? pcmR * 0x8000 : pcmR * 0x7FFF;
+        // Retorna dados estéreo intercalados (Interleaved L-R-L-R)
+        const L = renderedBuffer.getChannelData(0);
+        const R = renderedBuffer.getChannelData(1);
+        const interleaved = new Float32Array(L.length * 2);
+        for (let i = 0; i < L.length; i++) {
+            interleaved[i * 2] = L[i];
+            interleaved[i * 2 + 1] = R[i];
         }
         
-        pcmChunks.push(new Uint8Array(interleaved.buffer));
+        return interleaved;
+    }
+
+    /**
+     * Caminho A: Agenda o áudio para tocar no AudioContext principal.
+     */
+    private async schedulePlayback(data: Float32Array) {
+        // Converte Float32Array de volta para AudioBuffer para tocar
+        const buffer = this.audioContext.createBuffer(2, data.length / 2, this.sampleRate);
+        const L = buffer.getChannelData(0);
+        const R = buffer.getChannelData(1);
+        for (let i = 0; i < L.length; i++) {
+            L[i] = data[i * 2];
+            R[i] = data[i * 2 + 1];
+        }
+
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.audioContext.destination);
         
-        onProgress(((i + 1) / totalSteps) * 100);
+        // Agenda para tocar logo após o bloco anterior terminar
+        // Se o tempo atual já passou (lag de processamento), toca imediatamente
+        const startTime = Math.max(this.nextStartTime, this.audioContext.currentTime + 0.1);
+        source.start(startTime);
         
-        // Allow UI update
-        await new Promise(r => setTimeout(r, 10));
+        this.nextStartTime = startTime + buffer.duration;
+    }
+
+    /**
+     * Caminho B: Escreve o chunk PCM no disco (OPFS).
+     */
+    private async writeChunk(data: Float32Array) {
+        // Converter Float32 (-1.0 a 1.0) para Int16 (PCM)
+        const int16 = new Int16Array(data.length);
+        for (let i = 0; i < data.length; i++) {
+            const s = Math.max(-1, Math.min(1, data[i]));
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        const bytes = new Uint8Array(int16.buffer);
+
+        if (this.useOPFS && this.writable) {
+            await this.writable.write(bytes);
+        } else {
+            // Fallback RAM
+            this.memoryBuffer.push(bytes);
+        }
+        
+        this.totalBytesWritten += bytes.length;
+    }
+
+    /**
+     * Finaliza o arquivo WAV escrevendo o cabeçalho correto.
+     */
+    private async finalizeStorage() {
+        const header = new ArrayBuffer(44);
+        const view = new DataView(header);
+        
+        // WAV Header Construction
+        const fileSize = 36 + this.totalBytesWritten;
+        
+        writeString(view, 0, 'RIFF');
+        view.setUint32(4, fileSize, true);
+        writeString(view, 8, 'WAVE');
+        writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, 2, true); // Stereo
+        view.setUint32(24, this.sampleRate, true);
+        view.setUint32(28, this.sampleRate * 4, true); // ByteRate
+        view.setUint16(32, 4, true); // BlockAlign
+        view.setUint16(34, 16, true); // BitsPerSample
+        writeString(view, 36, 'data');
+        view.setUint32(40, this.totalBytesWritten, true);
+
+        if (this.useOPFS && this.writable && this.fileHandle) {
+            // Seek to beginning to overwrite placeholder header
+            // @ts-ignore
+            await this.writable.seek(0);
+            await this.writable.write(header);
+            await this.writable.close();
+            console.log("🚀 Blade Runner Engine: File Saved to OPFS successfully.");
+        } else {
+            // Fallback: Concatenate all RAM buffers
+            // Note: This is RAM heavy, but it's the only way if OPFS fails
+            const finalBuffer = new Uint8Array(44 + this.totalBytesWritten);
+            finalBuffer.set(new Uint8Array(header), 0);
+            let offset = 44;
+            for (const chunk of this.memoryBuffer) {
+                finalBuffer.set(chunk, offset);
+                offset += chunk.length;
+            }
+            // Store as a Blob URL temporarily if needed, but for now we rely on getDownloadUrl
+            this.memoryBuffer = [finalBuffer]; // Hack to store result
+        }
+    }
+
+    public async getDownloadUrl(): Promise<string> {
+        if (this.useOPFS && this.fileHandle) {
+            const file = await this.fileHandle.getFile();
+            return URL.createObjectURL(file);
+        } else if (this.memoryBuffer.length > 0) {
+            // Fallback RAM buffer (either chunks or finalized single buffer)
+            // If not finalized, we might have issue, but finalizeStorage handles it.
+            const blob = new Blob(this.memoryBuffer, { type: 'audio/wav' });
+            return URL.createObjectURL(blob);
+        }
+        return '';
+    }
+
+    // Controles de Playback
+    public pause() {
+        if (this.audioContext.state === 'running') this.audioContext.suspend();
+    }
+
+    public resume() {
+        if (this.audioContext.state === 'suspended') this.audioContext.resume();
     }
     
-    tempCtx.close();
-    
-    // 6. Binary Stitching (Concatenation)
-    const totalBytes = pcmChunks.reduce((acc, c) => acc + c.length, 0);
-    const wavBuffer = new Uint8Array(44 + totalBytes);
-    const view = new DataView(wavBuffer.buffer);
-    
-    // Write WAV Header
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + totalBytes, true);
-    writeString(view, 8, 'WAVE');
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 2, true); // Stereo
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 4, true); // ByteRate
-    view.setUint16(32, 4, true); // BlockAlign
-    view.setUint16(34, 16, true); // BitsPerSample
-    writeString(view, 36, 'data');
-    view.setUint32(40, totalBytes, true);
-    
-    // Write Data
-    let offset = 44;
-    for (const chunk of pcmChunks) {
-        wavBuffer.set(chunk, offset);
-        offset += chunk.length;
+    public close() {
+        this.audioContext.close();
+        // Cleanup OPFS file? Maybe keep it for download.
     }
-    
-    return URL.createObjectURL(new Blob([wavBuffer], { type: 'audio/wav' }));
-};
+}
+
+// Wrapper para compatibilidade com código existente (se necessário), 
+// mas a UI deve usar a classe diretamente para streaming.
+export const createAudioStream = () => new AudioStreamController();
