@@ -278,7 +278,8 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         setIsPlayingStream(true); 
         
         try {
-            const voiceName = prayerType === 'diurna' ? 'Kore' : (prayerType === 'noturna' ? 'Fenrir' : 'Zephyr');
+            // Use 'Aoede' for all types as it's deeper/more pleasant/universal
+            const voiceName = 'Aoede'; 
             
             await streamControllerRef.current.startStream(
                 blocks, 

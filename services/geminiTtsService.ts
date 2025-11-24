@@ -3,7 +3,7 @@ import { GoogleGenAI, Modality } from "@google/genai";
 const TTS_MODEL = "gemini-2.5-flash-preview-tts";
 
 // Define the available voice names for type safety.
-export type TtsVoice = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
+export type TtsVoice = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr' | 'Aoede';
 export type TtsContext = 'meditation-relax' | 'meditation-power' | 'meditation' | 'default';
 
 export const generateSpeech = async (

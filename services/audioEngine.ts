@@ -5,7 +5,7 @@ import { decode, decodeAudioData } from '../utils/audioUtils.ts';
 
 // --- Sound Synthesis Helpers (Pad & Binaural) ---
 
-const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string): AudioBuffer => {
+export const createPadBuffer = (ctx: BaseAudioContext, duration: number, mood: string): AudioBuffer => {
     const sampleRate = ctx.sampleRate;
     const buffer = ctx.createBuffer(2, sampleRate * duration, sampleRate);
     const L = buffer.getChannelData(0);
@@ -176,7 +176,7 @@ export class AudioStreamController {
                 // Bifurcação do Pipeline:
                 
                 // 1. Caminho A: Playback Imediato (AudioContext)
-                await this.schedulePlayback(pcmData);
+                await this.schedulePlayback(pcmData, blocks[i].instructions.mood);
                 if (i === 0) this.onReadyToPlayCallback(); // Avisa UI que pode tocar
 
                 // 2. Caminho B: Gravação em Disco (OPFS)
@@ -303,7 +303,43 @@ export class AudioStreamController {
     /**
      * Caminho A: Agenda o áudio para tocar no AudioContext principal.
      */
-    private async schedulePlayback(data: Float32Array) {
+    private async schedulePlayback(data: Float32Array, mood: string) {
+        const now = this.audioContext.currentTime;
+        const safetyGap = 3.0; // Seconds before audio runs out to start triggering filler
+
+        // --- SAFETY BUFFER / GAP FILLER LOGIC ---
+        // If nextStartTime is too close to now (or in the past), we are lagging.
+        // We must insert a pad buffer to fill the gap until the voice is ready.
+        // We add a small crossfade.
+        
+        if (this.nextStartTime < now + safetyGap) {
+            console.warn("⚠️ Audio Lag Detected! Inserting Safety Filler.");
+            const fillerDuration = 6; // Insert 6 seconds of pad
+            const fillerBuffer = createPadBuffer(this.audioContext, fillerDuration, mood);
+            
+            const fillerSource = this.audioContext.createBufferSource();
+            fillerSource.buffer = fillerBuffer;
+            
+            const fillerGain = this.audioContext.createGain();
+            // Fade In/Out for the filler
+            fillerGain.gain.setValueAtTime(0, now);
+            fillerGain.gain.linearRampToValueAtTime(0.5, now + 1);
+            fillerGain.gain.setValueAtTime(0.5, now + fillerDuration - 1);
+            fillerGain.gain.linearRampToValueAtTime(0, now + fillerDuration);
+            
+            fillerSource.connect(fillerGain);
+            fillerGain.connect(this.audioContext.destination);
+            
+            // Start filler effectively now (or at tail of previous)
+            const fillerStart = Math.max(now, this.nextStartTime);
+            fillerSource.start(fillerStart);
+            
+            // Push nextStartTime forward so the actual voice block comes after the filler
+            // We overlap slightly (1s) for crossfade
+            this.nextStartTime = fillerStart + fillerDuration - 1.0; 
+        }
+
+        // --- Standard Playback ---
         // Converte Float32Array de volta para AudioBuffer para tocar
         const buffer = this.audioContext.createBuffer(2, data.length / 2, this.sampleRate);
         const L = buffer.getChannelData(0);
@@ -315,11 +351,17 @@ export class AudioStreamController {
 
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
         
-        // Agenda para tocar logo após o bloco anterior terminar
-        // Se o tempo atual já passou (lag de processamento), toca imediatamente
-        const startTime = Math.max(this.nextStartTime, this.audioContext.currentTime + 0.1);
+        // Add a GainNode for crossfading entry
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(0, this.nextStartTime);
+        gainNode.gain.linearRampToValueAtTime(1, this.nextStartTime + 0.5); // Short fade-in to avoid clicks
+        
+        source.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        
+        // Schedule
+        const startTime = Math.max(this.nextStartTime, now + 0.1);
         source.start(startTime);
         
         this.nextStartTime = startTime + buffer.duration;
