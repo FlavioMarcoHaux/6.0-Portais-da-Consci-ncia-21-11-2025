@@ -47,7 +47,7 @@ const blockOutputSchema = {
                 mood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 intensity: { type: Type.NUMBER, description: "0.0 a 1.0" },
                 binauralFreq: { type: Type.NUMBER, description: "Frequência em Hz (ex: 4)" },
-                pauseAfter: { type: Type.INTEGER, description: "Segundos de pausa após a fala (Max 10s)." }
+                pauseAfter: { type: Type.INTEGER, description: "Mantenha 0. O áudio fará crossfade." }
             },
             required: ['mood', 'intensity', 'pauseAfter']
         }
@@ -164,7 +164,7 @@ const generateLongPrayer = async (
                 **ESTILO DE LINGUAGEM (CRUCIAL):**
                 - **SIMPLES & EMOCIONAL:** Fale como um amigo sábio. Evite termos acadêmicos ou teológicos complexos. Use a linguagem do coração.
                 - **SENSORIAL:** Foque no que a pessoa *sente*, *vê* e *ouve*. Use metáforas simples (água, luz, vento, abraço).
-                - **FLUXO CONTÍNUO:** Crie "Loopings Hipnóticos". Conecte as frases com "E...", "Enquanto...", "Perceba que...". Evite pausas bruscas.
+                - **FLUXO CONTÍNUO (CRUCIAL):** NÃO escreva introduções ("Olá", "Bem-vindo") nem conclusões ("Tchau") neste bloco, a menos que seja o primeiro ou último. O texto deve começar e terminar como se fosse uma frase contínua, usando conectivos ("E...", "Enquanto isso...", "Perceba que...") para que o áudio possa ser sobreposto sem pausas.
                 
                 **GATILHOS:**
                 - Use: "Milagre", "Providência", "Destravar", "Cura", "Resposta", "Hoje".
@@ -189,15 +189,15 @@ const generateLongPrayer = async (
                 const blockData = JSON.parse(blockResponse.text.trim()) as AudioScriptBlock;
                 
                 blockData.targetDuration = targetDuration * 60; // Seconds
-                // Force smaller pauses to keep the "Endless Carpet" feel
-                blockData.instructions.pauseAfter = Math.min(blockData.instructions.pauseAfter, 5); 
+                // Force ZERO pause to allow Crossfade Engine to handle transitions
+                blockData.instructions.pauseAfter = 0; 
 
                 return blockData;
             } catch (e) {
                 console.error("Erro ao gerar bloco:", e);
                 return { 
                     text: "Continue respirando fundo... sentindo a presença divina te envolver... este é o seu momento de paz...", 
-                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 5 },
+                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 0 },
                     targetDuration: targetDuration * 60 
                 } as AudioScriptBlock;
             }
