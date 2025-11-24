@@ -238,7 +238,7 @@ export class AudioStreamController {
         let pauseDuration = block.instructions.pauseAfter || 2;
         if (block.targetDuration) {
             const remaining = block.targetDuration - voiceDuration;
-            if (remaining > 0) pauseDuration = Math.min(remaining, 30); // Cap silence at 30s
+            if (remaining > 0) pauseDuration = Math.min(remaining, 20); // Cap silence at 20s
         }
         
         const totalDuration = Math.max(voiceDuration + pauseDuration, voiceDuration + 1);

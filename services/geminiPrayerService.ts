@@ -27,10 +27,9 @@ const prayerOutlineSchema = {
                 properties: {
                     blockTheme: { type: Type.STRING, description: "Tema deste bloco (ex: Salmo 91, Quebra de Maldição)." },
                     guidance: { type: Type.STRING, description: "Instrução de PNL/Hipnose e Referência Bíblica." },
-                    density: { type: Type.STRING, enum: ['high'], description: "Sempre High." },
                     suggestedMood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 },
-                required: ['blockTheme', 'guidance', 'density', 'suggestedMood']
+                required: ['blockTheme', 'guidance', 'suggestedMood']
             }
         }
     },
@@ -48,7 +47,7 @@ const blockOutputSchema = {
                 mood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 intensity: { type: Type.NUMBER, description: "0.0 a 1.0" },
                 binauralFreq: { type: Type.NUMBER, description: "Frequência em Hz (ex: 4)" },
-                pauseAfter: { type: Type.INTEGER, description: "Segundos de pausa após a fala (Max 20s)." }
+                pauseAfter: { type: Type.INTEGER, description: "Segundos de pausa após a fala (Max 10s)." }
             },
             required: ['mood', 'intensity', 'pauseAfter']
         }
@@ -65,17 +64,43 @@ const generateLongPrayer = async (
     historyContext: string
 ): Promise<AudioScriptBlock[]> => {
     
-    // ESTRATÉGIA DE FLUXO DE MESTRE (ATOS PROFUNDOS)
-    // Aumentar densidade para 120ppm para garantir que a IA fale bastante e preencha o tempo
-    let wordsPerMinuteBase = 120; 
+    // ESTRATÉGIA "GOLDILOCKS" (ZONA IDEAL)
+    // Blocos de 3 a 4 minutos são perfeitos:
+    // 1. Rápidos para gerar (20-30s), garantindo que o buffer nunca seque.
+    // 2. Longos o suficiente para manter profundidade narrativa.
+    // 3. Seguros para memória RAM.
     
-    // CRUCIAL: Forçar blocos de 5 minutos (300s) para garantir latência baixa no streaming.
-    // Se o bloco for muito longo (ex: 10 min), o usuário espera demais para o primeiro byte de áudio.
-    // Se for muito curto, perde-se a profundidade. 5 min é o ideal.
-    const idealBlockDuration = 5; // minutes
-    const numBlocks = Math.max(1, Math.ceil(duration / idealBlockDuration));
+    let blocksConfig: number[] = [];
+
+    if (duration <= 5) {
+        blocksConfig = [duration];
+    } else if (duration <= 10) {
+        blocksConfig = [2, duration - 2];
+    } else {
+        // Para sessões longas (15, 30, 60 min):
+        // Bloco 1: 1 min (Decolagem Imediata)
+        // Bloco 2: 3 min (Buffer Seguro)
+        // Blocos Seguintes: 4 min (Fluxo Contínuo e Profundo)
+        
+        blocksConfig.push(1); // Intro rápida
+        let remainingTime = duration - 1;
+        
+        // Segundo bloco de estabilização
+        if (remainingTime > 3) {
+            blocksConfig.push(3);
+            remainingTime -= 3;
+        }
+        
+        // O resto dividimos em blocos de 4 minutos (Zona Ideal)
+        while (remainingTime > 0) {
+            const nextBlock = Math.min(remainingTime, 4); 
+            blocksConfig.push(nextBlock);
+            remainingTime -= nextBlock;
+        }
+    }
     
-    const timePerBlockSeconds = Math.floor((duration * 60) / numBlocks);
+    const numBlocks = blocksConfig.length;
+    const wordsPerMinuteBase = 130; // Densidade alta para evitar silêncio
     
     // 1. Architect Phase
     const outlinePrompt = `
@@ -86,10 +111,10 @@ const generateLongPrayer = async (
         **ESTILO:** ${type.toUpperCase()}
         
         **ESTRUTURA (Jornada Espiritual):**
-        Divida em EXATAMENTE **${numBlocks} BLOCOS** lógicos de aproximadamente ${idealBlockDuration} minutos cada.
+        Divida em EXATAMENTE **${numBlocks} BLOCOS** lógicos para cobrir o tempo.
         
         1. **Início (Indução):** Respiração, Salmos de segurança (91/23), baixar frequência cerebral.
-        2. **Meio (Processo):** Metáforas de cura, milagres de Jesus, quebra de crenças, limpeza. (Vários blocos se necessário).
+        2. **Meio (Processo):** Metáforas de cura, milagres de Jesus, quebra de crenças, limpeza.
         3. **Fim (Ancoragem):** Decretos de vitória (Davi), gratidão, selamento.
         4. **CTA (Call to Action):** No último bloco, convidar para comentar e se inscrever no canal "Fé em 10 Minutos de Oração".
 
@@ -106,37 +131,44 @@ const generateLongPrayer = async (
     });
 
     const outline = JSON.parse(outlineResponse.text.trim());
+    
+    // Safety check: if Architect generated fewer blocks than config, repeat the last config duration
+    while (outline.blocks.length < numBlocks) {
+        outline.blocks.push(outline.blocks[outline.blocks.length - 1]);
+    }
+
     const fullScript: AudioScriptBlock[] = [];
     let context = `Iniciando Oração de ${duration}min: "${outline.title}".`;
 
     // 2. Writer Phase
-    // Processamos em chunks de 2 para não estourar rate limits, mas mantendo velocidade.
+    // Processamos em chunks pequenos para manter fluxo
     const chunkSize = 2; 
-    for (let i = 0; i < outline.blocks.length; i += chunkSize) {
-        const chunk = outline.blocks.slice(i, i + chunkSize);
+    for (let i = 0; i < numBlocks; i += chunkSize) {
+        // Slice config and outline together
+        const currentBlocksSlice = outline.blocks.slice(i, i + chunkSize);
+        const currentDurationsSlice = blocksConfig.slice(i, i + chunkSize);
         
-        const promises = chunk.map(async (block: any) => {
-            // Meta de palavras alta para garantir densidade e evitar silêncio excessivo
-            const targetWordCount = Math.round((timePerBlockSeconds / 60) * wordsPerMinuteBase);
+        const promises = currentBlocksSlice.map(async (block: any, idx: number) => {
+            const targetDuration = currentDurationsSlice[idx];
+            const targetWordCount = Math.round(targetDuration * wordsPerMinuteBase);
 
             const blockPrompt = `
                 ATUE COMO: Oração Guiada Mestre (Jesus/Davi + PNL).
-                ESCREVA O TEXTO FALADO para este bloco de ~${Math.round(timePerBlockSeconds/60)} minutos.
+                ESCREVA O TEXTO FALADO para este bloco de **${targetDuration} minutos**.
                 
                 **DADOS DO BLOCO:**
                 - Tema: ${block.blockTheme}
                 - Guia: ${block.guidance}
-                - META MÍNIMA: **${targetWordCount} palavras**. (Escreva MUITO, preencha o tempo).
+                - META OBRIGATÓRIA: **${targetWordCount} palavras**. (Escreva MUITO para preencher o tempo).
                 
                 **ESTILO DE LINGUAGEM (CRUCIAL):**
-                - **SIMPLES & PROFUNDO:** Fale como um amigo sábio e íntimo ao pé do ouvido. 
-                - **EVITE ERUDIÇÃO:** Não use termos teológicos complexos, palavras difíceis ou acadêmicas. Use a linguagem do povo, do coração.
-                - **SENSORIAL:** Foque no que a pessoa *sente*, *vê* e *ouve* na imaginação. Use metáforas simples (água, luz, vento, abraço).
-                - **FLUÍDEZ:** Crie "Loopings Hipnóticos". Conecte as frases. "E enquanto você respira... você sente... e sentindo isso...". Sem cortes bruscos.
+                - **SIMPLES & EMOCIONAL:** Fale como um amigo sábio. Evite termos acadêmicos ou teológicos complexos. Use a linguagem do coração.
+                - **SENSORIAL:** Foque no que a pessoa *sente*, *vê* e *ouve*. Use metáforas simples (água, luz, vento, abraço).
+                - **FLUXO CONTÍNUO:** Crie "Loopings Hipnóticos". Conecte as frases com "E...", "Enquanto...", "Perceba que...". Evite pausas bruscas.
                 
                 **GATILHOS:**
                 - Use: "Milagre", "Providência", "Destravar", "Cura", "Resposta", "Hoje".
-                - Cite a Bíblia como *decreto vivo*, não leitura.
+                - Cite a Bíblia como *decreto vivo*.
                 
                 ${styleInstruction}
                 
@@ -156,23 +188,24 @@ const generateLongPrayer = async (
                 });
                 const blockData = JSON.parse(blockResponse.text.trim()) as AudioScriptBlock;
                 
-                blockData.targetDuration = timePerBlockSeconds;
-                if (blockData.instructions.pauseAfter > 30) blockData.instructions.pauseAfter = 30; 
+                blockData.targetDuration = targetDuration * 60; // Seconds
+                // Force smaller pauses to keep the "Endless Carpet" feel
+                blockData.instructions.pauseAfter = Math.min(blockData.instructions.pauseAfter, 5); 
 
                 return blockData;
             } catch (e) {
                 console.error("Erro ao gerar bloco:", e);
                 return { 
                     text: "Continue respirando fundo... sentindo a presença divina te envolver... este é o seu momento de paz...", 
-                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 10 },
-                    targetDuration: timePerBlockSeconds 
+                    instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 5 },
+                    targetDuration: targetDuration * 60 
                 } as AudioScriptBlock;
             }
         });
 
         const results = await Promise.all(promises);
         fullScript.push(...results);
-        context = `Blocos finalizados: ${chunk.map((b: any) => b.blockTheme).join(', ')}.`;
+        context = `Blocos finalizados: ${currentBlocksSlice.map((b: any) => b.blockTheme).join(', ')}.`;
     }
 
     return fullScript;

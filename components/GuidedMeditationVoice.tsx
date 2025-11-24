@@ -82,7 +82,7 @@ const GuidedMeditationVoice: React.FC<GuidedMeditationVoiceProps> = ({ schedule,
             // Generate audio
             setState('generating_audio');
             audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-            const audioPromises = script.script.map(part => generateSpeech(part.text, 'Kore', 'meditation-relax'));
+            const audioPromises = script.script.map(part => generateSpeech(part.text, 'Aoede', 'meditation-relax'));
             const audioObjects = await Promise.all(audioPromises);
             const decodedAudios = await Promise.all(audioObjects.map(async (audioObj) => {
                 if (!audioObj?.data || !audioContextRef.current) throw new Error("Audio generation failed.");

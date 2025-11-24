@@ -40,7 +40,7 @@ const GuidedPrayerVoice: React.FC<GuidedPrayerVoiceProps> = ({ schedule, onExit 
             const pcmByteArrays: (Uint8Array | null)[] = new Array(totalBlocks).fill(null);
 
             const promises = blocks.map((block, index) => 
-                generateSpeech(block.text, 'Kore').then(result => {
+                generateSpeech(block.text, 'Aoede').then(result => {
                     if (result?.data) {
                         pcmByteArrays[index] = decode(result.data);
                     }

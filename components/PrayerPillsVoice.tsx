@@ -29,7 +29,7 @@ const PrayerPillsVoice: React.FC<PrayerPillsVoiceProps> = ({ schedule, onExit })
             
             // Generate audio
             setState('generating_audio');
-            const audioResult = await generateSpeech(pillText, 'Kore');
+            const audioResult = await generateSpeech(pillText, 'Aoede');
             if (audioResult?.data) {
                 const pcmBytes = decode(audioResult.data);
                 const wavBlob = encodeWAV(pcmBytes, 24000, 1, 16);

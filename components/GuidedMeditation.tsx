@@ -215,7 +215,7 @@ const GuidedMeditation: React.FC<GuidedMeditationProps> = ({ onExit }) => {
             }
     
             // Select voice and context based on style
-            const voice = style === 'power_up' ? 'Zephyr' : 'Kore';
+            const voice = style === 'power_up' ? 'Zephyr' : 'Aoede';
             const ttsContext = style === 'power_up' ? 'meditation-power' : 'meditation-relax';
     
             const results: { index: number, buffer: AudioBuffer, b64: string }[] = [];
