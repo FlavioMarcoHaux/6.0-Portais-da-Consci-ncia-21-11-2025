@@ -5,7 +5,7 @@ import { CoherenceVector, AgentId, Session } from '../types.ts';
 import { generateGuidedPrayer, recommendPrayerTheme } from '../services/geminiPrayerService.ts';
 import { createAudioStream, AudioStreamController } from '../services/audioEngine.ts';
 import { getFriendlyErrorMessage } from '../utils/errorUtils.ts';
-import { X, BookOpen, Loader2, Download, RefreshCw, Sun, Moon, Brain, Play, Pause, Zap, Settings2, FastForward, Rewind } from 'lucide-react';
+import { X, BookOpen, Loader2, Download, RefreshCw, Sun, Moon, Brain, Play, Pause, Zap, Settings2, FastForward, Rewind, Sparkles } from 'lucide-react';
 
 interface GuidedPrayerProps {
     onExit: (isManual: boolean, result?: any) => void;
@@ -80,7 +80,7 @@ const AdvancedAudioPlayer: React.FC<AdvancedPlayerProps> = ({ src, onReset, onFi
     };
 
     return (
-        <div className="w-full bg-gray-800/90 backdrop-blur-md rounded-2xl p-6 border border-yellow-500/30 shadow-2xl animate-fade-in">
+        <div className="w-full bg-gray-800/90 backdrop-blur-md rounded-2xl p-4 sm:p-6 border border-yellow-500/30 shadow-2xl animate-fade-in">
             <audio
                 ref={audioRef}
                 src={src}
@@ -90,13 +90,13 @@ const AdvancedAudioPlayer: React.FC<AdvancedPlayerProps> = ({ src, onReset, onFi
             />
 
             {/* Title Area */}
-            <div className="text-center mb-6">
+            <div className="text-center mb-4 sm:mb-6">
                 <h3 className="text-yellow-400 text-xs font-bold uppercase tracking-widest mb-1">Tocando Agora</h3>
-                <h2 className="text-white text-xl font-bold line-clamp-1">{theme}</h2>
+                <h2 className="text-white text-lg sm:text-xl font-bold line-clamp-1">{theme}</h2>
             </div>
 
             {/* Waveform Visualization (Static Placeholder for aesthetic) */}
-            <div className="flex items-center justify-center gap-1 h-12 mb-6 opacity-50">
+            <div className="flex items-center justify-center gap-1 h-8 sm:h-12 mb-4 sm:mb-6 opacity-50">
                 {[...Array(20)].map((_, i) => (
                     <div 
                         key={i} 
@@ -151,16 +151,16 @@ const AdvancedAudioPlayer: React.FC<AdvancedPlayerProps> = ({ src, onReset, onFi
                 </div>
 
                 {/* Playback Buttons */}
-                <div className="flex items-center gap-6">
+                <div className="flex items-center gap-4 sm:gap-6">
                     <button onClick={() => skip(-10)} className="text-gray-400 hover:text-white transition-colors">
                         <Rewind size={24} />
                     </button>
                     
                     <button 
                         onClick={togglePlay}
-                        className="w-16 h-16 bg-yellow-500 hover:bg-yellow-400 text-black rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                        className="w-14 h-14 sm:w-16 sm:h-16 bg-yellow-500 hover:bg-yellow-400 text-black rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
                     >
-                        {isPlaying ? <Pause size={32} fill="black" /> : <Play size={32} fill="black" className="ml-1" />}
+                        {isPlaying ? <Pause size={28} fill="black" /> : <Play size={28} fill="black" className="ml-1" />}
                     </button>
 
                     <button onClick={() => skip(10)} className="text-gray-400 hover:text-white transition-colors">
@@ -181,7 +181,7 @@ const AdvancedAudioPlayer: React.FC<AdvancedPlayerProps> = ({ src, onReset, onFi
                 </div>
             </div>
 
-            <div className="mt-8 pt-4 border-t border-gray-700/50 flex justify-between items-center">
+            <div className="mt-6 sm:mt-8 pt-4 border-t border-gray-700/50 flex justify-between items-center">
                 <button onClick={onReset} className="text-sm text-gray-500 hover:text-white flex items-center gap-2">
                     <RefreshCw size={14} /> Nova Oração
                 </button>
@@ -225,16 +225,17 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
     const chatHistory = agentIdForContext ? (chatHistories[agentIdForContext] || []) : [];
 
     const [isAutoSuggesting, setIsAutoSuggesting] = useState(false);
-    const [isPlayingStream, setIsPlayingStream] = useState(false); // For the simplified stream player
+    const [isPlayingStream, setIsPlayingStream] = useState(false); 
     const [isReadyToPlay, setIsReadyToPlay] = useState(false); 
     const [isDownloadReady, setIsDownloadReady] = useState(false);
-    const [isStartingAudio, setIsStartingAudio] = useState(false); // Feedback imediato
+    const [isStartingAudio, setIsStartingAudio] = useState(false); 
+    const [processedBlocks, setProcessedBlocks] = useState(0);
     
-    // New State for Options
     const [duration, setDuration] = useState(15);
     const [prayerType, setPrayerType] = useState<'diurna' | 'noturna' | 'terapeutica'>('diurna');
+    const [loadingMessage, setLoadingMessage] = useState("Conectando com o fluxo...");
+    const [loadingStage, setLoadingStage] = useState(0); // 0 to 3 for cycling messages
     
-    // Audio Engine Ref
     const streamControllerRef = useRef<AudioStreamController | null>(null);
     
     const wasAutoStarted = useRef(false);
@@ -242,8 +243,23 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
 
     const suggestions = useMemo(() => getPrayerSuggestions(coherenceVector), [coherenceVector]);
 
+    const loadingMessages = [
+        "Sintonizando a frequência de paz...",
+        "Harmonizando a trilha sonora...",
+        "Preparando buffer de alta fidelidade...",
+        "Garantindo imersão sem pausas..."
+    ];
+
+    useEffect(() => {
+        if (isStartingAudio) {
+            const interval = setInterval(() => {
+                setLoadingStage(prev => (prev + 1) % loadingMessages.length);
+            }, 3000);
+            return () => clearInterval(interval);
+        }
+    }, [isStartingAudio]);
+
     const handleGenerate = useCallback(async (inputTheme: string) => {
-        // Cleanup previous audio if exists
         if (audioDataUrl && audioDataUrl.startsWith('blob:')) {
             URL.revokeObjectURL(audioDataUrl);
         }
@@ -252,6 +268,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         setIsReadyToPlay(false);
         setIsDownloadReady(false);
         setIsStartingAudio(false);
+        setProcessedBlocks(0);
         
         try {
             const generatedBlocks = await generateGuidedPrayer(inputTheme, duration, prayerType, chatHistory);
@@ -265,7 +282,6 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
     const handleStartStream = useCallback(async () => {
         if (!blocks || blocks.length === 0) return;
         
-        // Initialize Blade Runner Engine
         if (streamControllerRef.current) {
             streamControllerRef.current.close();
         }
@@ -276,30 +292,31 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         setIsReadyToPlay(false);
         setIsDownloadReady(false);
         setIsPlayingStream(true); 
+        setProcessedBlocks(0);
         
         try {
-            // Use 'Aoede' for all types as it's deeper/more pleasant/universal
             const voiceName = 'Aoede'; 
             
             await streamControllerRef.current.startStream(
                 blocks, 
                 voiceName, 
-                (p) => updateState({ progress: p }), // On Progress
+                (p, count) => {
+                    updateState({ progress: p });
+                    setProcessedBlocks(count);
+                }, // On Progress
                 () => {
-                    // On Ready To Play (First Chunk Ready)
+                    // On Ready To Play
                     setIsReadyToPlay(true);
                     setIsStartingAudio(false); 
+                },
+                (downloadUrl) => {
+                    // On Complete
+                    updateState({ audioDataUrl: downloadUrl, progress: 100 });
+                    setIsDownloadReady(true);
+                    setIsPlayingStream(false); // Stop stream UI, switch to advanced
+                    streamControllerRef.current?.close(); 
                 }
             );
-            
-            // Finished
-            const downloadUrl = await streamControllerRef.current.getDownloadUrl();
-            updateState({ audioDataUrl: downloadUrl, progress: 100 });
-            
-            // Switch to Advanced Player mode logic
-            setIsDownloadReady(true);
-            setIsPlayingStream(false); // Stop stream indicator, let advanced player take over if needed
-            streamControllerRef.current.close(); // Close stream context to free resources for HTML5 audio
             
         } catch (err) {
             const friendlyError = getFriendlyErrorMessage(err, "Falha no streaming de áudio.");
@@ -307,7 +324,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
             setIsPlayingStream(false);
             setIsStartingAudio(false);
         }
-    }, [blocks, updateState, prayerType]);
+    }, [blocks, updateState]);
 
     useEffect(() => {
         const session = currentSession as Extract<Session, { type: 'guided_prayer' }>;
@@ -358,7 +375,6 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         recommendAndFetch();
     }, [currentSession, coherenceVector, chatHistory, handleGenerate, state, updateState]);
 
-    // Auto-start stream if auto-started session
     useEffect(() => {
         if (blocks && blocks.length > 0 && wasAutoStarted.current && !isDownloadReady) {
             handleStartStream();
@@ -366,7 +382,6 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         }
     }, [blocks, handleStartStream, isDownloadReady]);
 
-    // Cleanup
     useEffect(() => {
         const url = audioDataUrl;
         return () => {
@@ -404,6 +419,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
         setIsReadyToPlay(false);
         setIsDownloadReady(false);
         setIsStartingAudio(false);
+        setProcessedBlocks(0);
     };
     
     const toggleStreamPlay = () => {
@@ -438,7 +454,6 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                          <div className="max-w-xl w-full mx-auto space-y-8 pb-8">
                             <p className="text-lg text-gray-300 text-center">Configure sua sessão de oração guiada.</p>
                             
-                            {/* Type Selector */}
                              <div className="grid grid-cols-3 gap-2">
                                 <button 
                                     onClick={() => setPrayerType('diurna')}
@@ -463,7 +478,6 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                                 </button>
                             </div>
 
-                            {/* Duration Chips */}
                             <div>
                                 <label className="block text-sm text-gray-400 mb-3 text-center">Duração da Prática</label>
                                 <div className="flex flex-wrap justify-center gap-2">
@@ -518,16 +532,20 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                 );
             case 'display':
                 const isStreaming = (progress! > 0 && progress! < 100) || isStartingAudio;
+                const totalBlocksToBuffer = Math.min(4, blocks.length);
 
                 return (
-                    <div className="flex-1 flex flex-col h-full min-h-0 p-4 sm:p-6 overflow-hidden animate-fade-in">
-                        <div className="w-full max-w-3xl mx-auto text-center flex flex-col h-full">
+                    <div className="flex flex-col h-full overflow-hidden p-2 sm:p-4 animate-fade-in">
+                        <div className="w-full max-w-3xl mx-auto flex flex-col h-full gap-4">
                             
-                            {/* Phase 1: Start / Streaming / Loading */}
-                            {!isDownloadReady && (
-                                <>
-                                    <h2 className="text-2xl font-bold text-center mb-4 text-yellow-300 flex-shrink-0">Intenção: "{theme}"</h2>
-                                    <div className="mb-6 p-6 bg-gray-800/60 rounded-2xl flex flex-col items-center gap-4 flex-shrink-0 border border-yellow-500/20 shadow-lg relative overflow-hidden">
+                            {/* TOP SECTION: Status / Player (Fixed) */}
+                            <div className="flex-shrink-0 flex flex-col gap-4">
+                                <h2 className="text-xl sm:text-2xl font-bold text-center text-yellow-300 truncate px-2">
+                                    Intenção: "{theme}"
+                                </h2>
+
+                                {!isDownloadReady && (
+                                    <div className="p-4 sm:p-6 bg-gray-800/60 rounded-2xl flex flex-col items-center gap-4 border border-yellow-500/20 shadow-lg relative overflow-hidden">
                                         {!isReadyToPlay && !isStreaming && (
                                             <button onClick={handleStartStream} className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-4 px-8 rounded-full flex items-center justify-center transition-colors shadow-lg text-lg group">
                                                 <Zap size={24} className="mr-3 text-yellow-400 group-hover:animate-pulse" />
@@ -537,11 +555,23 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
 
                                         {(isStreaming || isReadyToPlay) && (
                                             <>
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <Loader2 size={16} className="animate-spin text-yellow-400" />
-                                                    <span className="text-xs font-bold text-yellow-400 uppercase tracking-widest">
-                                                        {isStartingAudio ? 'Conectando com o fluxo...' : 'Gerando...'}
-                                                    </span>
+                                                <div className="flex flex-col items-center gap-2 mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <Loader2 size={16} className="animate-spin text-yellow-400" />
+                                                        <span className="text-xs font-bold text-yellow-400 uppercase tracking-widest animate-pulse">
+                                                            {isStartingAudio ? 'Bufferizando...' : 'Gerando em Background...'}
+                                                        </span>
+                                                    </div>
+                                                    {isStartingAudio ? (
+                                                        <div className="flex flex-col items-center">
+                                                            <p className="text-sm text-gray-200 font-semibold text-center animate-fade-in">{loadingMessages[loadingStage]}</p>
+                                                            <p className="text-xs text-gray-400 mt-1">
+                                                                Processando Bloco {Math.min(processedBlocks + 1, totalBlocksToBuffer)} de {totalBlocksToBuffer}...
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-xs text-green-400">Reproduzindo sem pausas.</p>
+                                                    )}
                                                 </div>
 
                                                 <div className="relative">
@@ -556,7 +586,7 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
 
                                                 <div className="w-full max-w-sm mt-4">
                                                     <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                                        <span>Construindo Áudio</span>
+                                                        <span>Geração Total</span>
                                                         <span>{Math.round(progress || 0)}%</span>
                                                     </div>
                                                     <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden relative">
@@ -571,36 +601,38 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
                                             </>
                                         )}
                                     </div>
-                                </>
-                            )}
+                                )}
 
-                            {/* Phase 2: Advanced Player (Ready) */}
-                            {isDownloadReady && audioDataUrl && (
-                                <div className="mb-6">
-                                    <AdvancedAudioPlayer 
-                                        src={audioDataUrl} 
-                                        onReset={handleReset} 
-                                        onFinish={handleFinishSession}
-                                        theme={theme}
-                                        duration={duration * 60} // Approx duration for visuals
-                                    />
-                                </div>
-                            )}
+                                {isDownloadReady && audioDataUrl && (
+                                    <div className="w-full">
+                                        <AdvancedAudioPlayer 
+                                            src={audioDataUrl} 
+                                            onReset={handleReset} 
+                                            onFinish={handleFinishSession}
+                                            theme={theme}
+                                            duration={duration * 60}
+                                        />
+                                    </div>
+                                )}
+                            </div>
                             
-                            {/* Text Content - Only show if not in full player mode or if user wants to read */}
-                            {!isDownloadReady && (
-                                <div className="bg-gray-900/50 p-6 rounded-lg overflow-y-auto text-left flex-1 min-h-0 border border-gray-800 shadow-inner" data-readable-content>
+                            {/* MIDDLE SECTION: Text Content (Scrollable) */}
+                            <div className="flex-1 min-h-0 overflow-y-auto bg-gray-900/50 p-4 sm:p-6 rounded-lg border border-gray-800 shadow-inner custom-scrollbar">
+                                <div data-readable-content>
                                      {blocks.map((block, i) => (
                                         <div key={i} className="mb-6 animate-fade-in" style={{ animationDelay: `${i * 100}ms` }}>
                                             <p className="whitespace-pre-wrap text-gray-200 leading-relaxed text-lg font-serif opacity-90">{block.text}</p>
                                         </div>
                                      ))}
                                 </div>
-                            )}
+                            </div>
                             
+                            {/* BOTTOM SECTION: Controls (Fixed) */}
                             {!isDownloadReady && (
-                                <div className="text-center mt-6 flex items-center justify-center gap-4 flex-shrink-0">
-                                    <button onClick={handleReset} className="text-yellow-400 font-semibold flex items-center gap-2"><RefreshCw size={16} />Nova Oração</button>
+                                <div className="flex-shrink-0 text-center flex items-center justify-center gap-4 pt-2">
+                                    <button onClick={handleReset} className="text-yellow-400 font-semibold flex items-center gap-2 hover:text-yellow-300 transition-colors">
+                                        <RefreshCw size={16} /> Nova Oração
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -611,13 +643,13 @@ const GuidedPrayer: React.FC<GuidedPrayerProps> = ({ onExit }) => {
 
     return (
         <div className="h-full w-full glass-pane rounded-2xl flex flex-col p-1 animate-fade-in">
-            <header className="flex items-center justify-between p-4 border-b border-gray-700/50">
+            <header className="flex items-center justify-between p-4 border-b border-gray-700/50 flex-shrink-0">
                 <div className="flex items-center gap-3"><BookOpen className="w-8 h-8 text-yellow-300" /><h1 className="text-xl font-bold text-gray-200">Oração Guiada</h1></div>
                 <div className="flex items-center gap-4">
                     <button onClick={() => onExit(true)} className="text-gray-400 hover:text-white transition-colors"><X size={24} /></button>
                 </div>
             </header>
-            <main className="flex-1 flex flex-col min-h-0" data-guide-id="tool-guided_prayer">
+            <main className="flex-1 flex flex-col min-h-0 overflow-hidden" data-guide-id="tool-guided_prayer">
                 {renderContent()}
             </main>
         </div>

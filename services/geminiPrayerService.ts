@@ -47,7 +47,7 @@ const blockOutputSchema = {
                 mood: { type: Type.STRING, enum: ['ethereal', 'warm', 'epic', 'nature', 'deep_focus'] },
                 intensity: { type: Type.NUMBER, description: "0.0 a 1.0" },
                 binauralFreq: { type: Type.NUMBER, description: "Frequência em Hz (ex: 4)" },
-                pauseAfter: { type: Type.INTEGER, description: "Mantenha 0. O áudio fará crossfade." }
+                pauseAfter: { type: Type.INTEGER, description: "Mantenha SEMPRE 0 para permitir crossfade." }
             },
             required: ['mood', 'intensity', 'pauseAfter']
         }
@@ -151,6 +151,8 @@ const generateLongPrayer = async (
         const promises = currentBlocksSlice.map(async (block: any, idx: number) => {
             const targetDuration = currentDurationsSlice[idx];
             const targetWordCount = Math.round(targetDuration * wordsPerMinuteBase);
+            const isFirstBlock = fullScript.length === 0 && idx === 0;
+            const isLastBlock = fullScript.length + idx === numBlocks - 1;
 
             const blockPrompt = `
                 ATUE COMO: Oração Guiada Mestre (Jesus/Davi + PNL).
@@ -164,7 +166,11 @@ const generateLongPrayer = async (
                 **ESTILO DE LINGUAGEM (CRUCIAL):**
                 - **SIMPLES & EMOCIONAL:** Fale como um amigo sábio. Evite termos acadêmicos ou teológicos complexos. Use a linguagem do coração.
                 - **SENSORIAL:** Foque no que a pessoa *sente*, *vê* e *ouve*. Use metáforas simples (água, luz, vento, abraço).
-                - **FLUXO CONTÍNUO (CRUCIAL):** NÃO escreva introduções ("Olá", "Bem-vindo") nem conclusões ("Tchau") neste bloco, a menos que seja o primeiro ou último. O texto deve começar e terminar como se fosse uma frase contínua, usando conectivos ("E...", "Enquanto isso...", "Perceba que...") para que o áudio possa ser sobreposto sem pausas.
+                
+                **FLUXO CONTÍNUO (EXTREMAMENTE IMPORTANTE):**
+                Este áudio será "mixado" com o anterior e o próximo.
+                ${isFirstBlock ? '- Comece com uma saudação calorosa e indução.' : '- NÃO comece com "Olá" ou introduções. Comece usando conectivos de continuidade como "E...", "Enquanto você sente...", "Perceba agora que...", "Continuando essa jornada...".'}
+                ${isLastBlock ? '- Finalize com bênção e o CTA.' : '- NÃO finalize com despedidas. Termine o pensamento deixando um gancho para o próximo bloco, como "e prepare-se para...", "sentindo isso crescer...".'}
                 
                 **GATILHOS:**
                 - Use: "Milagre", "Providência", "Destravar", "Cura", "Resposta", "Hoje".
@@ -189,14 +195,14 @@ const generateLongPrayer = async (
                 const blockData = JSON.parse(blockResponse.text.trim()) as AudioScriptBlock;
                 
                 blockData.targetDuration = targetDuration * 60; // Seconds
-                // Force ZERO pause to allow Crossfade Engine to handle transitions
+                // Force ZERO pause to allow Crossfade Engine to handle transitions seamlessly
                 blockData.instructions.pauseAfter = 0; 
 
                 return blockData;
             } catch (e) {
                 console.error("Erro ao gerar bloco:", e);
                 return { 
-                    text: "Continue respirando fundo... sentindo a presença divina te envolver... este é o seu momento de paz...", 
+                    text: "E continuando respirando fundo... sentindo a presença divina te envolver... este é o seu momento de paz que se expande agora...", 
                     instructions: { mood: 'ethereal', intensity: 0.5, pauseAfter: 0 },
                     targetDuration: targetDuration * 60 
                 } as AudioScriptBlock;

@@ -96,7 +96,7 @@ function writeString(view: DataView, offset: number, string: string) {
   }
 }
 
-// --- BLADE RUNNER ENGINE v3: Asymmetric Pipeline with Cruise Control ---
+// --- BLADE RUNNER ENGINE v7: The "Staging Area" Strategy ---
 
 export class AudioStreamController {
     private audioContext: AudioContext;
@@ -108,40 +108,41 @@ export class AudioStreamController {
     private writable: FileSystemWritableFileStream | null = null;
     private totalBytesWritten = 0;
     private useOPFS = true;
-    private memoryBuffer: Uint8Array[] = []; // Fallback RAM buffer
+    private memoryBuffer: Uint8Array[] = []; // Fallback RAM buffer for download construction
 
-    // Asymmetric Pipeline Queue
+    // Queue & State
     private blockQueue: { block: AudioScriptBlock, index: number }[] = [];
-    private isProcessingQueue = false;
+    // Staging Queue: Holds processed audio (PCM) in RAM until the buffer target is met
+    private playbackStagingQueue: { data: Float32Array, mood: string }[] = []; 
+    
     private processedBlockCount = 0;
     private totalBlocks = 0;
     private voiceName: TtsVoice = 'Aoede';
-    private CROSSFADE_DURATION = 2.0; // Seconds overlap
+    private CROSSFADE_DURATION = 2.0; 
+    
+    // Playback Control
+    private hasStartedPlaying = false;
+    private BLOCKS_TO_BUFFER = 4; // A Lei dos 4 Blocos
 
-    // State
+    // Callbacks
     public isProcessing = false;
-    private onProgressCallback: (p: number) => void = () => {};
+    private onProgressCallback: (p: number, count: number) => void = () => {};
     private onReadyToPlayCallback: () => void = () => {};
-    private cruiseControlInterval: number | null = null;
+    private onCompleteCallback: (url: string) => void = () => {};
     
     constructor() {
         this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: this.sampleRate });
     }
 
-    /**
-     * Inicializa o sistema de arquivos privado (OPFS) para gravação direta em disco.
-     */
     private async initStorage() {
         try {
             const root = await navigator.storage.getDirectory();
-            // Cria um arquivo temporário único para esta sessão
             const fileName = `prayer_stream_${Date.now()}.wav`;
             this.fileHandle = await root.getFileHandle(fileName, { create: true });
             
-            // @ts-ignore - TypeScript definitions might be outdated for OPFS
+            // @ts-ignore 
             this.writable = await this.fileHandle.createWritable();
             
-            // Escreve o cabeçalho WAV (Placeholder de 44 bytes)
             const header = new Uint8Array(44); 
             await this.writable?.write(header);
             
@@ -154,115 +155,113 @@ export class AudioStreamController {
         }
     }
 
-    /**
-     * Inicia o pipeline assimétrico.
-     */
     public async startStream(
         blocks: AudioScriptBlock[], 
         voice: TtsVoice, 
-        onProgress: (p: number) => void,
-        onReadyToPlay: () => void
+        onProgress: (p: number, count: number) => void,
+        onReadyToPlay: () => void,
+        onComplete: (url: string) => void
     ) {
         this.isProcessing = true;
         this.onProgressCallback = onProgress;
         this.onReadyToPlayCallback = onReadyToPlay;
+        this.onCompleteCallback = onComplete;
         this.voiceName = voice;
         this.totalBlocks = blocks.length;
         this.processedBlockCount = 0;
+        this.hasStartedPlaying = false;
+        this.playbackStagingQueue = [];
         
-        // Populate Queue
         this.blockQueue = blocks.map((block, index) => ({ block, index }));
         
         await this.initStorage();
         
-        if (this.audioContext.state === 'suspended') {
-            await this.audioContext.resume();
-        }
-        this.nextStartTime = this.audioContext.currentTime + 0.2;
-
-        // WARM START: Process first 2 blocks immediately (High Priority)
-        console.log("🔥 Warm Start: Processing initial blocks...");
-        await this.processNext(); // Block 1 (Intro)
-        this.onReadyToPlayCallback(); // Trigger play ASAP
-        await this.processNext(); // Block 2 (Stabilization)
-
-        // CRUISE CONTROL: Start monitoring for the rest
-        this.startCruiseControl();
-    }
-
-    /**
-     * Cruise Control Loop: Monitors buffer health and decides when to process.
-     */
-    private startCruiseControl() {
-        this.cruiseControlInterval = window.setInterval(async () => {
-            if (this.blockQueue.length === 0 && !this.isProcessingQueue) {
-                this.stopCruiseControl();
-                await this.finalizeStorage();
-                this.isProcessing = false;
-                this.onProgressCallback(100);
-                return;
-            }
-
-            if (this.isProcessingQueue) return;
-
-            // Calculate Audio Buffer Health (Time remaining in scheduled audio)
-            const timeRemaining = this.nextStartTime - this.audioContext.currentTime;
-            
-            // Logic:
-            // If buffer < 180s (3 mins), generate!
-            // If buffer > 300s (5 mins), sleep (save battery/cpu).
-            if (timeRemaining < 180) {
-                // console.log(`⚡ Cruise Control: Buffer low (${timeRemaining.toFixed(1)}s). Processing next block.`);
-                await this.processNext();
-            } else {
-                // console.log(`💤 Cruise Control: Buffer healthy (${timeRemaining.toFixed(1)}s). Sleeping.`);
-            }
-            
-            // Update Progress UI based on blocks processed, not just time
-            const progress = (this.processedBlockCount / this.totalBlocks) * 100;
-            this.onProgressCallback(progress);
-
-        }, 1000); // Check every second
-    }
-
-    private stopCruiseControl() {
-        if (this.cruiseControlInterval) {
-            clearInterval(this.cruiseControlInterval);
-            this.cruiseControlInterval = null;
-        }
-    }
-
-    private async processNext() {
-        if (this.blockQueue.length === 0 || this.isProcessingQueue) return;
+        // CRITICAL: Do NOT resume audio context yet. Keep it suspended or just don't schedule.
+        // We will resume only when flushing the staging queue.
         
-        this.isProcessingQueue = true;
-        const item = this.blockQueue.shift();
-        
-        if (item) {
-            try {
-                const pcmData = await this.processBlock(item.block, this.voiceName);
-                if (pcmData) {
-                    // Caminho A: Playback com Crossfade
-                    await this.schedulePlayback(pcmData, item.block.instructions.mood);
-                    
-                    // Caminho B: Storage
-                    await this.writeChunk(pcmData);
-                }
+        const safeBufferTarget = Math.min(this.BLOCKS_TO_BUFFER, this.totalBlocks);
+        console.log(`🏁 Iniciando Geração. Meta de Buffer Seguro: ${safeBufferTarget} Blocos.`);
+
+        while (this.blockQueue.length > 0 && this.isProcessing) {
+            const item = this.blockQueue.shift();
+            if (item) {
+                // 1. Process Logic
+                await this.processAndStoreBlock(item.block);
                 this.processedBlockCount++;
-            } catch (e) {
-                console.error("Error processing block:", e);
+
+                // 2. Progress Calculation
+                const progress = (this.processedBlockCount / this.totalBlocks) * 100;
+                this.onProgressCallback(progress, this.processedBlockCount);
+
+                // 3. Check Buffer Target
+                if (!this.hasStartedPlaying && this.processedBlockCount >= safeBufferTarget) {
+                    console.log(`✅ Buffer Blindado Atingido (${this.processedBlockCount}/${safeBufferTarget}). Liberando Represa.`);
+                    await this.flushStagingQueue();
+                    this.hasStartedPlaying = true;
+                    this.onReadyToPlayCallback();
+                } else if (this.hasStartedPlaying) {
+                    // If already playing, flush immediately (schedule next block)
+                    await this.flushStagingQueue();
+                }
+
+                // 4. CPU Yielding (Respiração)
+                await new Promise(r => setTimeout(r, 100));
             }
         }
-        this.isProcessingQueue = false;
+
+        if (this.isProcessing) {
+            await this.finalizeStorage();
+            const url = await this.getDownloadUrl();
+            
+            // Fallback: Ensure we play if we finished everything but didn't trigger (e.g. extremely short script)
+            if (!this.hasStartedPlaying) {
+                await this.flushStagingQueue();
+                this.hasStartedPlaying = true;
+                this.onReadyToPlayCallback();
+            }
+            
+            this.onCompleteCallback(url);
+            this.isProcessing = false;
+        }
     }
 
-    /**
-     * Processa um bloco de texto: TTS -> Mixagem com Música -> PCM Raw
-     */
+    private async processAndStoreBlock(block: AudioScriptBlock) {
+        try {
+            const pcmData = await this.processBlock(block, this.voiceName);
+            if (pcmData) {
+                // Save to disk immediately (for download)
+                await this.writeChunk(pcmData);
+                
+                // Push to Staging Queue (RAM) for playback scheduling
+                // We do NOT schedule on the AudioContext yet to avoid premature playback
+                this.playbackStagingQueue.push({ data: pcmData, mood: block.instructions.mood });
+            }
+        } catch (e) {
+            console.error("Error processing block:", e);
+        }
+    }
+
+    private async flushStagingQueue() {
+        // Initialize audio timing if this is the first flush
+        if (!this.hasStartedPlaying) {
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+            // Set start time slightly in the future to allow scheduling
+            this.nextStartTime = this.audioContext.currentTime + 0.25;
+        }
+
+        // Drain the queue and schedule everything
+        while (this.playbackStagingQueue.length > 0) {
+            const item = this.playbackStagingQueue.shift();
+            if (item) {
+                await this.schedulePlayback(item.data, item.mood);
+            }
+        }
+    }
+
     private async processBlock(block: AudioScriptBlock, voice: TtsVoice): Promise<Float32Array | null> {
-        // 1. Chunking e TTS
         const textChunks = splitTextIntoChunks(block.text);
-        const tempCtx = new OfflineAudioContext(1, 48000, this.sampleRate); // Dummy
         const blockChunkBuffers: AudioBuffer[] = [];
 
         for (const chunk of textChunks) {
@@ -286,36 +285,29 @@ export class AudioStreamController {
                     }
                 }
             } catch (e) { console.error("TTS failed for chunk", e); }
-            await new Promise(r => setTimeout(r, 50)); // Rate limit throttle
+            await new Promise(r => setTimeout(r, 20)); 
         }
 
         if (blockChunkBuffers.length === 0) return null;
 
         const voiceBuffer = stitchBuffers(this.audioContext, blockChunkBuffers);
         
-        // 2. Timings e Música
         const voiceDuration = voiceBuffer.duration;
-        // We don't rely on pauseAfter for spacing anymore, we rely on Crossfade. 
-        // So we just ensure the music covers the voice + crossfade tail.
-        const totalDuration = voiceDuration + 1.0; // Small tail
+        const totalDuration = voiceDuration + 1.0; 
         const totalSamples = Math.ceil(totalDuration * this.sampleRate);
 
-        // 3. Mixagem Offline (Voice + Music)
         const offlineCtx = new OfflineAudioContext(2, totalSamples, this.sampleRate);
         
-        // Voz
         const voiceSource = offlineCtx.createBufferSource();
         voiceSource.buffer = voiceBuffer;
         voiceSource.connect(offlineCtx.destination);
         voiceSource.start(0);
         
-        // Música
         const musicBuffer = createPadBuffer(offlineCtx, totalDuration, block.instructions.mood);
         const musicSource = offlineCtx.createBufferSource();
         musicSource.buffer = musicBuffer;
         const musicGain = offlineCtx.createGain();
         
-        // Automação de Volume (Ducking)
         const intensity = block.instructions.intensity || 0.5;
         const duckVol = 0.15 * intensity;
         const fullVol = 0.4 * intensity;
@@ -329,7 +321,6 @@ export class AudioStreamController {
         musicGain.connect(offlineCtx.destination);
         musicSource.start(0);
 
-        // Binaural
         if (block.instructions.binauralFreq) {
             const binBuffer = createBinauralBuffer(offlineCtx, totalDuration, block.instructions.binauralFreq);
             const binSource = offlineCtx.createBufferSource();
@@ -343,7 +334,6 @@ export class AudioStreamController {
 
         const renderedBuffer = await offlineCtx.startRendering();
         
-        // Retorna dados estéreo intercalados (Interleaved L-R-L-R)
         const L = renderedBuffer.getChannelData(0);
         const R = renderedBuffer.getChannelData(1);
         const interleaved = new Float32Array(L.length * 2);
@@ -355,26 +345,19 @@ export class AudioStreamController {
         return interleaved;
     }
 
-    /**
-     * Caminho A: Agenda o áudio com CROSSFADE.
-     */
     private async schedulePlayback(data: Float32Array, mood: string) {
         const now = this.audioContext.currentTime;
-        
-        // Safety Buffer Check
-        if (this.nextStartTime < now && this.processedBlockCount > 0) {
-             console.warn("⚠️ Gap Detected. Resetting clock.");
+        // If we drifted too far behind, jump ahead.
+        if (this.nextStartTime < now) {
              this.nextStartTime = now + 0.1;
         }
 
-        // --- CROSSFADE LOGIC ---
-        // Instead of starting AT nextStartTime, we start BEFORE it to overlap.
-        // But if it's the very first block, we don't overlap.
         let startTime = this.nextStartTime;
-        let fadeDuration = 0.5; // Default short fade
+        let fadeDuration = 0.1; 
 
-        if (this.processedBlockCount > 0) {
-            // Overlap logic: Start 'CROSSFADE_DURATION' earlier than the end of previous
+        // Apply Crossfade if we are not at the very beginning
+        // (Buffer has > 0, but we need to check logical position)
+        if (startTime > now + 0.5) { // Only crossfade if we have a continuous stream ahead
             startTime = Math.max(now, this.nextStartTime - this.CROSSFADE_DURATION);
             fadeDuration = this.CROSSFADE_DURATION;
         }
@@ -391,11 +374,8 @@ export class AudioStreamController {
         source.buffer = buffer;
         
         const gainNode = this.audioContext.createGain();
-        
-        // Envelope Automation
         gainNode.gain.setValueAtTime(0, startTime);
-        gainNode.gain.linearRampToValueAtTime(1, startTime + fadeDuration); // Fade In
-        // Fade Out at the end to ensure clean mix if next block comes
+        gainNode.gain.linearRampToValueAtTime(1, startTime + fadeDuration); 
         gainNode.gain.setValueAtTime(1, startTime + buffer.duration - fadeDuration);
         gainNode.gain.linearRampToValueAtTime(0, startTime + buffer.duration); 
         
@@ -404,15 +384,9 @@ export class AudioStreamController {
         
         source.start(startTime);
         
-        // Update cursor: Point to where the NEXT block should logically end relative to this one
-        // Effectively: Start Time + Duration - Overlap Amount (because next one will subtract overlap too)
-        // Simplified: We just track the absolute end, and the NEXT schedule call subtracts.
         this.nextStartTime = startTime + buffer.duration;
     }
 
-    /**
-     * Caminho B: Escreve o chunk PCM no disco (OPFS).
-     */
     private async writeChunk(data: Float32Array) {
         const int16 = new Int16Array(data.length);
         for (let i = 0; i < data.length; i++) {
@@ -429,9 +403,6 @@ export class AudioStreamController {
         this.totalBytesWritten += bytes.length;
     }
 
-    /**
-     * Finaliza o arquivo WAV.
-     */
     private async finalizeStorage() {
         const header = new ArrayBuffer(44);
         const view = new DataView(header);
@@ -442,12 +413,12 @@ export class AudioStreamController {
         writeString(view, 8, 'WAVE');
         writeString(view, 12, 'fmt ');
         view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true); // PCM
-        view.setUint16(22, 2, true); // Stereo
+        view.setUint16(20, 1, true); 
+        view.setUint16(22, 2, true); 
         view.setUint32(24, this.sampleRate, true);
-        view.setUint32(28, this.sampleRate * 4, true); // ByteRate
-        view.setUint16(32, 4, true); // BlockAlign
-        view.setUint16(34, 16, true); // BitsPerSample
+        view.setUint32(28, this.sampleRate * 4, true); 
+        view.setUint16(32, 4, true); 
+        view.setUint16(34, 16, true); 
         writeString(view, 36, 'data');
         view.setUint32(40, this.totalBytesWritten, true);
 
@@ -456,7 +427,6 @@ export class AudioStreamController {
             await this.writable.seek(0);
             await this.writable.write(header);
             await this.writable.close();
-            console.log("🚀 Blade Runner Engine: Finalized.");
         } else {
             const finalBuffer = new Uint8Array(44 + this.totalBytesWritten);
             finalBuffer.set(new Uint8Array(header), 0);
@@ -489,7 +459,7 @@ export class AudioStreamController {
     }
     
     public close() {
-        this.stopCruiseControl();
+        this.isProcessing = false;
         this.audioContext.close();
     }
 }
